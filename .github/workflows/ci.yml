@@ -153,6 +153,24 @@ jobs:
           echo "Running: mypy $targets"
           python -m mypy $targets
 
+      - name: Install FFmpeg (the suites shell out to ffmpeg / ffprobe)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GitHub's ubuntu-latest image ships no ffmpeg, but the backend
+          # suite invokes bare `ffmpeg`/`ffprobe` subprocesses and dies with
+          # FileNotFoundError without them (clean-checkout simulation,
+          # 2026-10-24: 37 backend tests). Installing ffmpeg also means the
+          # root suite's ffmpeg-marked tests now EXECUTE instead of
+          # auto-skipping via tests/conftest.py — intended: the e2e outputs
+          # tests skip cleanly when the gitignored outputs/ tree is absent
+          # (see tests/integration/test_e2e_outputs.py); everything else
+          # that needs ffmpeg genuinely runs against the real binary.
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+
       - name: Pytest — hermetic PR suite (live / slow / golden excluded)
         shell: bash
         run: |
@@ -283,6 +301,18 @@ jobs:
         run: |
           Write-Host "windows-latest provides MSVC Build Tools + WebView2 out of the box."
           Write-Host "Placeholder: add any extra Tauri prerequisites here as the shell grows."
+
+      - name: Placeholder sidecar artifacts for cargo check
+        shell: pwsh
+        run: |
+          # tauri-build validates that the externalBin sidecar exe and the
+          # bundled resources directory declared in tauri.conf.json exist.
+          # The real artifacts come from the PyInstaller freeze in the
+          # release workflow; for this compile-only check, placeholders
+          # satisfy the existence validation.
+          New-Item -ItemType Directory -Force -Path "src-tauri/binaries/agent-backend" | Out-Null
+          New-Item -ItemType File -Force -Path "src-tauri/binaries/agent-backend/placeholder.txt" | Out-Null
+          New-Item -ItemType File -Force -Path "src-tauri/binaries/agent-backend-x86_64-pc-windows-msvc.exe" | Out-Null
 
       - name: cargo check (src-tauri) — only if Cargo.toml exists
         if: hashFiles('src-tauri/Cargo.toml') != ''

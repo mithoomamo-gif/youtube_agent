@@ -55,6 +55,11 @@ def test_repo_root_layout(repo_root):
 
 def test_roadmap_spec_files_exist():
     """The spec sources this suite is built from are present (sibling tree)."""
+    if not ROADMAP_ROOT.is_dir():
+        # Clean checkouts (CI) contain only this repo; the roadmap tree is a
+        # sibling in the dev workspace. Skip rather than fail there — the
+        # check still bites on every dev machine where the sibling exists.
+        pytest.skip("sibling roadmap tree (youtube-windows-agent/) not in this checkout")
     assert (ROADMAP_ROOT / "MASTER_ROADMAP.md").is_file()
     assert (ROADMAP_ROOT / "roadmap-sections" / "17_testing_qa.md").is_file()
 

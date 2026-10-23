@@ -1,0 +1,82 @@
+{
+  "schema_version": "style_profile.v1",
+  "channel_id": "channel",
+  "video_count": 1,
+  "duration": {
+    "median_s": 185.73,
+    "p25_s": 185.73,
+    "p75_s": 185.73,
+    "target_s": 185.73
+  },
+  "speech": {
+    "wpm_median": 118.23,
+    "language": "en"
+  },
+  "hook": {
+    "window_s": 37.15,
+    "types": [
+      "cold_open"
+    ]
+  },
+  "chapters": {
+    "target_count": 5,
+    "avg_chapter_s": 37.15
+  },
+  "visuals": {
+    "stock_ratio": 1.0,
+    "ai_ratio": 0.0,
+    "avg_shot_len_s": 8.0,
+    "cuts_per_min": 4.85
+  },
+  "captions": {
+    "present_rate": 1.0,
+    "burned_in_rate": 0.0,
+    "burned_in": false
+  },
+  "music": {
+    "present_rate": 1.0,
+    "expected": true
+  },
+  "thumbnail": {
+    "layout_class": null,
+    "text_words_min": null,
+    "text_words_max": null,
+    "face_rate": 0.0,
+    "face_expected": false,
+    "palette_class": "dark_neutral"
+  },
+  "title_formula": {
+    "len_min": 60,
+    "len_max": 60,
+    "number_rate": 0.0,
+    "bracket_rate": 1.0,
+    "caps_rate": 0.0,
+    "keyword_position": "start"
+  },
+  "description_structure": {
+    "sections": [
+      "intro",
+      "cta"
+    ],
+    "hashtag_min": 0,
+    "hashtag_max": 0,
+    "link_expected": false
+  },
+  "provenance": {
+    "source_asset_ids": [
+      "own-round3-facts-ocean"
+    ],
+    "source_sha256": [
+      "ca6bb52f4ae7159a6b34a86780ccdd6c97cd4f582f4c24884a0cfafa128169d3"
+    ]
+  },
+  "no_copy_manifest": {
+    "never_reuse_asset_ids": [
+      "own-round3-facts-ocean"
+    ],
+    "never_reuse_sha256": [
+      "ca6bb52f4ae7159a6b34a86780ccdd6c97cd4f582f4c24884a0cfafa128169d3"
+    ],
+    "contains_competitor_assets": false
+  }
+}

@@ -24,10 +24,16 @@ the same directory (see ``_load_sidecar_texts`` / ``_classify``).
 
 Failure semantics (deliberate)
 ------------------------------
-If ``outputs/round2/`` does not exist or contains no MP4s, these tests
-**FAIL** with a clear message — they never skip silently.  Acceptance
-of Round 2 requires real files on disk; a missing output is a blocker,
-not a pass.  The only skip in this module is the standard ``ffmpeg``
+The ``outputs/`` tree is gitignored, so a clean checkout (CI) never
+contains it.  When ``outputs/round2/`` is *absent entirely*, these
+tests **SKIP** with a clear reason — the same pattern
+``tests/unit/test_smoke.py`` uses for the sibling roadmap tree that
+only exists in the dev workspace.  But whenever the directory *exists*
+(a dev machine, where the E2E team has run), the fail-loud design is
+unchanged: an existing-but-empty directory, a missing niche video or
+an invalid MP4 **FAIL** with a clear message — acceptance of Round 2
+requires real files on disk, and a missing output there is a blocker,
+not a pass.  The other skip in this module is the standard ``ffmpeg``
 marker behaviour from ``tests/conftest.py`` when no ffprobe binary
 exists at all (not the case on the reference VM: FFmpeg 8.x).
 
@@ -167,14 +173,19 @@ def _classified_videos() -> dict[str, Path]:
 
 
 def _require_outputs() -> list[Path]:
-    """Return the MP4 list or FAIL (never skip) with a precise message."""
-    mp4s = _discover_mp4s()
+    """Return the MP4 list; SKIP if the outputs tree is absent, else FAIL loud.
+
+    Absent directory = clean checkout (``outputs/`` is gitignored) → skip,
+    following the sibling-tree pattern in ``tests/unit/test_smoke.py``.
+    Existing directory = the E2E team has run here → keep failing loud.
+    """
     if not OUTPUT_DIR.is_dir():
-        pytest.fail(
-            f"Round 2 E2E outputs directory does not exist: {OUTPUT_DIR} — "
-            "the E2E integration team has not produced any videos yet "
-            "(expected a 'facts' MP4 and a 'cricket' MP4 for acceptance test E)."
+        pytest.skip(
+            f"Round 2 E2E outputs directory not in this checkout: {OUTPUT_DIR} "
+            "(outputs/ is gitignored; these tests run on dev machines where "
+            "the E2E integration team has produced the videos)."
         )
+    mp4s = _discover_mp4s()
     if not mp4s:
         present = sorted(str(p.relative_to(OUTPUT_DIR)) for p in OUTPUT_DIR.rglob("*"))
         pytest.fail(

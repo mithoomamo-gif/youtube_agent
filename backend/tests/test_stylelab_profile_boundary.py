@@ -21,7 +21,8 @@ count for the nothing-persisted assertions):
    wrong-typed field / ``contains_competitor_assets: true``) are
    rejected (422 ``invalid_style_profile``), nothing persisted;
 5. a clean patterns-only payload in the exact proof-profile shape
-   (``outputs/stylelab/proof/style_profile.json``) is accepted and
+   (committed fixture copy of
+   ``outputs/stylelab/proof/style_profile.json``) is accepted and
    persisted, even though the source competitor HAS titles /
    descriptions on file (the gate has no false positive on patterns);
 6. competitor_ids owned by a DIFFERENT channel are rejected even
@@ -59,9 +60,21 @@ DESCRIPTION = (
     "creatures live beneath the waves every single night"
 )
 
-_PROOF_PATH = (
+# The clean payload is the Round-3 proof profile (patterns only). A
+# byte-identical copy is committed as a test fixture so this file also
+# passes in clean checkouts — outputs/ is fully gitignored and never
+# reaches CI. The fixture is preferred; the live proof artifact stays
+# as the fallback on dev machines if the fixture is ever removed.
+_FIXTURE_PATH = (
+    Path(__file__).resolve().parent
+    / "fixtures" / "stylelab" / "style_profile.json"
+)
+_OUTPUTS_PROOF_PATH = (
     Path(__file__).resolve().parents[2]
     / "outputs" / "stylelab" / "proof" / "style_profile.json"
+)
+_PROOF_PATH = (
+    _FIXTURE_PATH if _FIXTURE_PATH.is_file() else _OUTPUTS_PROOF_PATH
 )
 
 
