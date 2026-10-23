@@ -1,0 +1,8 @@
+# Per-niche example layer: Facts.
+version: "1"
+entries:
+  - surface: "NASA"
+    lang: en
+    alias: "Nassa"
+    ipa: "ˈnæsə"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}

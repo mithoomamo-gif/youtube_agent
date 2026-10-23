@@ -1,0 +1,19 @@
+# Per-niche example layer: Tech — model/product names via dictionary alias
+# in all languages.
+version: "1"
+entries:
+  - surface: "GPT"
+    lang: en
+    alias: "G P T"
+    ipa: "dʒiː piː tiː"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}
+  - surface: "NVIDIA"
+    lang: en
+    alias: "en vid ee ah"
+    ipa: "ɪnˈvɪdiə"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}
+  - surface: "localhost"
+    lang: en
+    alias: "local host"
+    ipa: "ˈloʊkəl hoʊst"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}

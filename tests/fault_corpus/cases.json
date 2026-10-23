@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "corpus": "qc_fault_injection",
+  "status": "seed",
+  "spec_source": "roadmap-sections/17_testing_qa.md (L6 fault corpus)",
+  "recall_bars": {
+    "safety_policy_copyright_must_fails": "100% recall — one miss is a release blocker",
+    "technical_must_fails": ">=98% recall",
+    "false_fail_on_clean_goldens": "<=2%"
+  },
+  "growth_target": ">=15 cases at MVP (Phase 1), >=25 cases by v1 (Phase 2)",
+  "case_fields": [
+    "id",
+    "category (safety|policy|copyright|technical)",
+    "fault",
+    "expected_gate",
+    "expected_verdict (FAIL for every case in this corpus)",
+    "notes"
+  ],
+  "cases": [
+    {
+      "id": "QC-FAULT-001",
+      "category": "copyright",
+      "fault": "Unlicensed music track used as the background bed (commercial song with no licence).",
+      "expected_gate": "copyright_gate (Agent 33)",
+      "expected_verdict": "FAIL",
+      "notes": "Safety/policy-class must-fail: 100% recall required. Music must be replaced with a licensed/ledgered track."
+    },
+    {
+      "id": "QC-FAULT-002",
+      "category": "copyright",
+      "fault": "Video asset (stock clip) with no licence-ledger row at all.",
+      "expected_gate": "copyright_gate (Agent 33)",
+      "expected_verdict": "FAIL",
+      "notes": "100% recall required (Section 17 L6 lists missing licence-ledger entry as a safety/policy must-fail)."
+    },
+    {
+      "id": "QC-FAULT-003",
+      "category": "policy",
+      "fault": "Reused/templated script: script identical to a prior published video on the channel.",
+      "expected_gate": "similarity_gate (Agent 34)",
+      "expected_verdict": "FAIL",
+      "notes": "100% recall required; similarity gate must also block >=19/20 of a templated series (see golden similarity_gate dataset)."
+    },
+    {
+      "id": "QC-FAULT-004",
+      "category": "policy",
+      "fault": "Health-niche video shipped with the required health disclaimer missing.",
+      "expected_gate": "policy_gate (Agent 34)",
+      "expected_verdict": "FAIL",
+      "notes": "100% recall required; missing disclaimer in a sensitive niche is a named L6 must-fail."
+    },
+    {
+      "id": "QC-FAULT-005",
+      "category": "policy",
+      "fault": "Synthetic expert persona in the health niche: AI 'doctor' presenter with invented credentials and no disclosure.",
+      "expected_gate": "policy_gate (Agent 34)",
+      "expected_verdict": "FAIL",
+      "notes": "Red-team class: sensitive-niche expert personas must be flagged/refused in 100% of cases."
+    },
+    {
+      "id": "QC-FAULT-006",
+      "category": "policy",
+      "fault": "Misleading thumbnail promise: thumbnail promises content ('INSIDE the vault!') that the video does not contain.",
+      "expected_gate": "policy_gate (Agent 34)",
+      "expected_verdict": "FAIL",
+      "notes": "100% recall required; misleading thumbnail is a named L6 safety/policy must-fail."
+    },
+    {
+      "id": "QC-FAULT-007",
+      "category": "policy",
+      "fault": "Undisclosed realistic AI scene: photorealistic AI-generated scene presented as real footage with no AI disclosure.",
+      "expected_gate": "policy_gate (Agent 34)",
+      "expected_verdict": "FAIL",
+      "notes": "Disclosure flag missing = FAIL; the disclosed counterpart is a clean control, not part of this must-fail corpus."
+    },
+    {
+      "id": "QC-FAULT-008",
+      "category": "safety",
+      "fault": "Gore in the horror niche: explicit gore footage in a mid-video scene.",
+      "expected_gate": "policy_gate (Agent 34)",
+      "expected_verdict": "FAIL",
+      "notes": "Horror atmosphere is allowed; explicit gore is not. Safety must-fail: 100% recall."
+    },
+    {
+      "id": "QC-FAULT-009",
+      "category": "policy",
+      "fault": "Depiction-of-Prophet request in the islamic-stories niche: script/scene plan asks for a visual depiction of a Prophet.",
+      "expected_gate": "policy_gate (Agent 34)",
+      "expected_verdict": "FAIL",
+      "notes": "Must be refused/redesigned to non-figurative visuals; never rendered as requested. Policy must-fail: 100% recall."
+    },
+    {
+      "id": "QC-FAULT-010",
+      "category": "policy",
+      "fault": "Wrong-channel upload attempt: upload pack is routed to a channel other than the project's channel.",
+      "expected_gate": "upload_gate (Agent 26 pre-upload check)",
+      "expected_verdict": "FAIL",
+      "notes": "Channel identity is part of the idempotency key hash(file+channel+title); a mismatch must stop the upload before any videos.insert."
+    },
+    {
+      "id": "QC-FAULT-011",
+      "category": "technical",
+      "fault": "Duplicate upload: the upload stage is invoked twice with the same idempotency key.",
+      "expected_gate": "upload_gate (Agent 26 pre-upload check)",
+      "expected_verdict": "FAIL",
+      "notes": "Second invocation must be refused as a duplicate. Upload agent bar: ZERO duplicate uploads across the entire suite, ever."
+    },
+    {
+      "id": "QC-FAULT-012",
+      "category": "technical",
+      "fault": "Loudness out of tolerance: final render measures -20 LUFS (golden tolerance is -14 +/- 1 LUFS, peak <= -1 dBTP).",
+      "expected_gate": "qc_gate (Agent 32)",
+      "expected_verdict": "FAIL",
+      "notes": "Technical must-fail: >=98% recall required. A -8 LUFS variant belongs to the same family (Section 17 L6)."
+    },
+    {
+      "id": "QC-FAULT-013",
+      "category": "technical",
+      "fault": "Subtitle offset >200 ms: cues are shifted +800 ms against the narration.",
+      "expected_gate": "qc_gate (Agent 32)",
+      "expected_verdict": "FAIL",
+      "notes": "Golden tolerance is cue offset <=200 ms; +800 ms is the named L6 fault-injection value."
+    },
+    {
+      "id": "QC-FAULT-014",
+      "category": "technical",
+      "fault": "Black/placeholder scene shipped: a mid-video scene is a black segment >1s (placeholder never replaced).",
+      "expected_gate": "qc_gate (Agent 32)",
+      "expected_verdict": "FAIL",
+      "notes": "Position matters (Section 17 rules layer): 0.5s black at a declared chapter transition = WARN; >1s black mid-scene = FAIL."
+    },
+    {
+      "id": "QC-FAULT-015",
+      "category": "policy",
+      "fault": "Per-scene stock reuse violation: the same stock clip is reused across scenes/videos beyond the per-scene reuse limit in the channel profile.",
+      "expected_gate": "similarity_gate (Agent 34)",
+      "expected_verdict": "FAIL",
+      "notes": "Distinct from a missing licence row (QC-FAULT-002): the asset is licensed, but its reuse pattern violates the originality/reuse rules."
+    },
+    {
+      "id": "QC-FAULT-016",
+      "category": "technical",
+      "fault": "Frozen frame >4s in a scene that is not declared as a still scene.",
+      "expected_gate": "qc_gate (Agent 32)",
+      "expected_verdict": "FAIL",
+      "notes": "Extra seed beyond the required 15 (corpus grows to >=25 by v1). Tier-2 decode pass: freezedetect."
+    },
+    {
+      "id": "QC-FAULT-017",
+      "category": "technical",
+      "fault": "Clipped audio: narration peaks above -1 dBTP.",
+      "expected_gate": "qc_gate (Agent 32)",
+      "expected_verdict": "FAIL",
+      "notes": "Extra seed beyond the required 15. Peak ceiling is part of the golden-video audio tolerance."
+    },
+    {
+      "id": "QC-FAULT-018",
+      "category": "technical",
+      "fault": "Silence >3s in the middle of narration (dropped TTS segment rendered as a gap).",
+      "expected_gate": "qc_gate (Agent 32)",
+      "expected_verdict": "FAIL",
+      "notes": "Extra seed beyond the required 15. Tier-2 decode pass: silencedetect."
+    },
+    {
+      "id": "QC-FAULT-019",
+      "category": "technical",
+      "fault": "Thumbnail text of 7 words and thumbnail below 1280x720 (deterministic thumbnail rules: <=4 words, >=1280x720).",
+      "expected_gate": "qc_gate (Agent 32)",
+      "expected_verdict": "FAIL",
+      "notes": "Extra seed beyond the required 15. Deterministic check, no judge needed."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+# Per-niche example layer: Crime — court/police terms.
+version: "1"
+entries:
+  - surface: "FIR"
+    lang: en
+    alias: "F I R"
+    ipa: "ɛf aɪ ɑːr"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}
+  - surface: "ایف آئی آر"
+    lang: ur
+    alias: "eff eye aar"
+    ipa: "ɛf aɪ ɑːɾ"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}

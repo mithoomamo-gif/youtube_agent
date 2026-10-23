@@ -1,0 +1,161 @@
+{
+  "fixture_id": "F-EN-BASIC",
+  "status": "full",
+  "spec_source": "roadmap-sections/17_testing_qa.md (L4 fixture catalogue)",
+  "niche": {
+    "source": "builtin",
+    "name": "facts",
+    "user_idea": null
+  },
+  "language": "en",
+  "language_detail": {
+    "code": "en",
+    "script": "Latin",
+    "code_switching": false
+  },
+  "target_minutes": 1,
+  "target_seconds": 60,
+  "topic": "Why does the Moon look bigger near the horizon?",
+  "summary": "English facts fixture, stock available for every scene, ~60s. The short hermetic workhorse for L4.",
+  "inputs": [
+    "topic.txt",
+    "brief.md",
+    "script_excerpt.md"
+  ],
+  "provider_fakes": {
+    "stock": "returns one licensed clip per scene",
+    "tts": "fake wav + known timings",
+    "llm": "recorded deterministic responses, temperature 0"
+  },
+  "idempotency_key_basis": "hash(file+channel+title)",
+  "quota_expectation": {
+    "uploads_bucket_units": 1,
+    "search_bucket_units": 1,
+    "shared_units": 505,
+    "note": "Hand-computed for ONE hermetic run of this fixture against the fake providers; the run ledger must match exactly (A-QUOTA-LEDGER-MATH). June 2026 granular buckets (MASTER_ROADMAP Part 7): one videos.insert = 1 unit from the uploads bucket (100/day); one search.list call = 1 from the search bucket (100/day); shared bucket (10,000/day) = 505 for a fully packaged publish (thumbnails.set 50 + captions.insert 400 + playlistItems.insert 50 + ~5 of polls/lookups). Fake-provider units mirror this accounting shape, not a live API bill."
+  },
+  "expected_artefacts": [
+    {
+      "path": "project.json",
+      "stage": "setup",
+      "required": true
+    },
+    {
+      "path": "research_brief.md",
+      "stage": "research",
+      "required": true
+    },
+    {
+      "path": "script.md",
+      "stage": "script",
+      "required": true
+    },
+    {
+      "path": "voiceover_text.txt",
+      "stage": "voiceover_text",
+      "required": true
+    },
+    {
+      "path": "media/voiceover.wav",
+      "stage": "tts",
+      "required": true,
+      "note": "Hermetic run: represented by MEDIA_PLACEHOLDER.md, no real audio."
+    },
+    {
+      "path": "scene_list.json",
+      "stage": "scenes",
+      "required": true
+    },
+    {
+      "path": "media/scenes/",
+      "stage": "assets",
+      "required": true,
+      "note": "Hermetic run: represented by MEDIA_PLACEHOLDER.md, no real media files."
+    },
+    {
+      "path": "subtitles.srt",
+      "stage": "subtitles",
+      "required": true
+    },
+    {
+      "path": "thumbnail_plan.md",
+      "stage": "thumbnail",
+      "required": true
+    },
+    {
+      "path": "seo_pack.json",
+      "stage": "seo",
+      "required": true
+    },
+    {
+      "path": "editing_plan.md",
+      "stage": "editing_plan",
+      "required": true
+    },
+    {
+      "path": "licence_ledger.json",
+      "stage": "assets",
+      "required": true
+    },
+    {
+      "path": "qc_report.json",
+      "stage": "qc",
+      "required": true
+    },
+    {
+      "path": "metadata_pack.json",
+      "stage": "upload_pack",
+      "required": true
+    }
+  ],
+  "assertions": [
+    {
+      "id": "A-ARTEFACT-COMPLETE",
+      "layer": "L4",
+      "description": "Artefact completeness: every entry in expected_artefacts exists, its hash matches the run manifest, and the licence ledger covers 100% of assets.",
+      "expected": "all expected artefacts present; licence_ledger coverage == 100%"
+    },
+    {
+      "id": "A-DAG-GATES-BEFORE-UPLOAD",
+      "layer": "L4",
+      "description": "DAG correctness: no agent starts before its dependencies are DONE; QC (32), Copyright (33) and Policy/Similarity (34) gates must all PASS before the Upload fake is callable.",
+      "expected": "pipeline order respected; upload callable only after gates 32/33/34 == PASS"
+    },
+    {
+      "id": "A-OUT-OF-ORDER-UPLOAD-REFUSED",
+      "layer": "L4",
+      "description": "Gate refusal of out-of-order upload: the harness attempts to invoke the upload stage before the gate agents have passed.",
+      "expected": "upload attempt is refused with an explicit gate error; zero videos.insert calls recorded"
+    },
+    {
+      "id": "A-IDEMPOTENT-UPLOAD",
+      "layer": "L4",
+      "description": "Idempotency: upload stage run twice with the same idempotency key hash(file+channel+title).",
+      "expected": "fake YouTube records exactly one (single) videos.insert per idempotency key"
+    },
+    {
+      "id": "A-QUOTA-LEDGER-MATH",
+      "layer": "L4",
+      "description": "Quota-ledger math: the fixture run's ledger entries sum to the hand-computed bucket usage (uploads bucket, search bucket, shared units) for this fixture; the scheduler defers rather than overflowing a near-empty bucket.",
+      "expected": "ledger totals == hand-computed totals in this manifest; no bucket goes negative or overflows"
+    },
+    {
+      "id": "A-NO-PAID-REEXECUTION",
+      "layer": "L4",
+      "description": "Checkpoint/resume: if the harness kills the sidecar and restarts, completed PAID steps are never re-executed (fake-provider call counts asserted).",
+      "expected": "fake-provider call counts for completed paid steps do not increase on resume"
+    },
+    {
+      "id": "A-DETERMINISM-HERMETIC",
+      "layer": "L4",
+      "description": "Determinism boundary: with fakes and temperature 0, two runs of this fixture produce identical scene lists, subtitle timings within +/-100 ms, and identical QC verdicts (pixel/audio identity is the golden-video suite's job, not this layer's).",
+      "expected": "scene lists identical; subtitle timing delta <= 100 ms; QC verdicts identical"
+    },
+    {
+      "id": "A-EN-STOCK-EVERY-SCENE",
+      "layer": "L4",
+      "description": "Stock fakes return a licensed asset for every scene, so the AI-image fallback must NOT fire in this fixture.",
+      "expected": "ai_image_fallback_invocations == 0; every scene has a licence-ledger row"
+    }
+  ]
+}

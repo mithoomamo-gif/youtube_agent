@@ -1,0 +1,19 @@
+# Per-niche example layer: Islamic stories — prophets'/companions' names,
+# Arabic-origin terms, honorifics always expanded.
+version: "1"
+entries:
+  - surface: "حضرت محمد ﷺ"
+    lang: ur
+    alias: "Hazrat Muhammad, sallallahu alaihi wasallam"
+    ipa: "həzˈɾət̪ məˈɦəmməd̪"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}
+  - surface: "حضرت ابراہیم"
+    lang: ur
+    alias: "Hazrat Ibrahim"
+    ipa: "həzˈɾət̪ ɪbˈɾaːɦiːm"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}
+  - surface: "رضی اللہ عنہ"
+    lang: ur
+    alias: "razi Allahu anhu"
+    ipa: "rəˈziː əlˈlaːɦʊ ˈənɦʊ"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}

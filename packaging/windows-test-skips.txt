@@ -1,0 +1,31 @@
+# =============================================================================
+# windows-test-skips.txt — documented Windows deselection list (release gate)
+# =============================================================================
+# Consumed by: .github/workflows/release.yml, job "verify" (release gate).
+# The workflow loader tolerates a comment-only file: it strips any
+# trailing comment, drops blank lines and lines starting with '#', and
+# loads whatever pytest node ids remain (zero here, by design).
+#
+# THIS LIST IS INTENTIONALLY EMPTY (Round 6 closure, 2026-10-23).
+#
+# It previously held 29 entries covering every test in
+# backend/tests/pipeline/test_render.py and
+# backend/tests/pipeline/test_render_quality_tiers.py. Those entries
+# existed ONLY because both modules evaluated
+# subprocess.run(["which", "ffmpeg"], ...) at import time: `which` is
+# a POSIX utility with no stock Windows equivalent, so collection
+# itself raised FileNotFoundError on Windows runners.
+#
+# The defect is now FIXED in both modules, using the portable idiom
+# already used by the sibling suites (backend/tests/pipeline/
+# test_qc.py, backend/tests/pipeline/test_scenes.py):
+# shutil.which("ffmpeg") is None. The entries were therefore deleted,
+# per this file's own standing instruction not to let fixed entries
+# linger. Note that --deselect could never have rescued those modules
+# anyway: it cannot excuse a module whose IMPORT raises.
+#
+# Release-gate philosophy (unchanged): Windows failures get FIXED, not
+# skipped. Add an entry here ONLY for a proven platform dependency
+# visible in the test code itself, as one pytest node id per line in
+# the format "<node-id>  # <reason with file:line evidence>".
+# =============================================================================

@@ -1,0 +1,92 @@
+# LLM model registry — prices and model IDs are DATA, never code.
+# Verified Oct-2026 published rates (USD per 1M tokens, standard sync tier).
+# Hot-reloadable: ModelRegistry.reload_if_changed() picks up edits by mtime.
+registry_version: "2026-10-22.1"
+effective_from: "2026-10-22"
+verified_at: "2026-10-22"
+prices_verified_at: "2026-10-22"
+
+tiers:
+  T0: # Utility
+    models:
+      - provider: gemini
+        model_id: gemini-3.1-flash-lite
+        input_price_per_1m: 0.25
+        output_price_per_1m: 1.50
+        cached_input_price_per_1m: 0.025
+        verified_at: "2026-10-22"
+      - provider: openai
+        model_id: gpt-6-luna
+        input_price_per_1m: 0.10
+        output_price_per_1m: 0.50
+        cached_input_price_per_1m: 0.01
+        verified_at: "2026-10-22"
+      - provider: anthropic
+        model_id: claude-haiku-5.5
+        input_price_per_1m: 0.10   # <=100K prompts; steps up above 100K (router caps at 100K)
+        output_price_per_1m: 0.50
+        cached_input_price_per_1m: 0.01
+        verified_at: "2026-10-22"
+  T1: # Workhorse
+    models:
+      - provider: gemini
+        model_id: gemini-3.8-flash
+        input_price_per_1m: 0.75   # INTRO rate; doubles 2027-01-01
+        output_price_per_1m: 3.75
+        cached_input_price_per_1m: 0.075
+        price_expires: "2026-12-31"
+        input_price_after_expiry_per_1m: 1.50
+        output_price_after_expiry_per_1m: 7.50
+        verified_at: "2026-10-22"
+      - provider: openai
+        model_id: gpt-5.4-mini
+        input_price_per_1m: 0.75
+        output_price_per_1m: 4.50
+        cached_input_price_per_1m: 0.075
+        verified_at: "2026-10-22"
+      - provider: anthropic
+        model_id: claude-haiku-4.5
+        input_price_per_1m: 1.00
+        output_price_per_1m: 5.00
+        cached_input_price_per_1m: 0.10
+        verified_at: "2026-10-22"
+  T2: # Quality
+    models:
+      - provider: gemini
+        model_id: gemini-3.1-pro-preview
+        input_price_per_1m: 2.00
+        output_price_per_1m: 12.00
+        cached_input_price_per_1m: 0.20
+        verified_at: "2026-10-22"
+      - provider: openai
+        model_id: gpt-6.1-sol
+        input_price_per_1m: 2.00
+        output_price_per_1m: 10.00
+        cached_input_price_per_1m: 0.10
+        verified_at: "2026-10-22"
+      - provider: anthropic
+        model_id: claude-sonnet-5.5
+        input_price_per_1m: 2.00
+        output_price_per_1m: 10.00
+        cached_input_price_per_1m: 0.20
+        verified_at: "2026-10-22"
+  T3: # Flagship — Claude Opus 5.5 is the default final-script model
+    models:
+      - provider: anthropic
+        model_id: claude-opus-5.5
+        input_price_per_1m: 4.00
+        output_price_per_1m: 20.00
+        cached_input_price_per_1m: 0.40
+        verified_at: "2026-10-22"
+      - provider: openai
+        model_id: gpt-6-astra
+        input_price_per_1m: 10.00
+        output_price_per_1m: 50.00
+        cached_input_price_per_1m: 1.00
+        verified_at: "2026-10-22"
+      - provider: anthropic
+        model_id: claude-fable-5.1
+        input_price_per_1m: 10.00
+        output_price_per_1m: 50.00
+        cached_input_price_per_1m: 0.25
+        verified_at: "2026-10-22"

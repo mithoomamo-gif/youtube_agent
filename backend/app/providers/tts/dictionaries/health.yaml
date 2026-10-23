@@ -1,0 +1,13 @@
+# Per-niche example layer: Health — drug/condition names, careful forms.
+version: "1"
+entries:
+  - surface: "paracetamol"
+    lang: en
+    alias: "para seat a moll"
+    ipa: "ˌpærəˈsiːtəmɒl"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}
+  - surface: "ibuprofen"
+    lang: en
+    alias: "eye byoo pro fen"
+    ipa: "ˌaɪbjuːˈproʊfən"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}

@@ -1,0 +1,1 @@
+{"etag":"fixture-etag-not-a-real-value","items":[{"etag":"fixture-etag-not-a-real-value","id":"UC1234567890123456789012","kind":"youtube#channel","statistics":{"hiddenSubscriberCount":false,"subscriberCount":"54321","videoCount":"187","viewCount":"9876543"}}],"kind":"youtube#channelListResponse","pageInfo":{"resultsPerPage":5,"totalResults":1}}

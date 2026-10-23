@@ -1,0 +1,441 @@
+# =============================================================================
+# Price catalog — YouTube Agent (Budget Guard)
+# =============================================================================
+# Prices are DATA, never code (roadmap Part 10 / section 35, Leak 11).
+# Every estimate and ledger entry snapshots the catalog row it used, so a
+# historical video's cost never changes retroactively when prices move.
+#
+# All figures verified 2026-10-22 (roadmap price base). unit_price_usd is the
+# price of ONE unit of `unit`:
+#   input_token / output_token / cached_input_token -> USD per single token
+#       (e.g. $0.10 per 1M input tokens = 0.0000001 per token)
+#   tts_char  -> USD per character (a 10-min video is ~9,000 chars)
+#   image     -> USD per generated image
+#
+# BILLING ROUTE MATTERS: `billing_route` records HOW the user actually pays.
+#   api_payg             pay-as-you-go API pricing
+#   subscription_credits subscription credit pool (e.g. ElevenLabs UI plans)
+#   free / local         $0 marginal cost routes
+# NOTE: ElevenLabs subscription credits cost ~$1.49-1.80 per 10-min video
+# (Creator $22/mo = 121k credits; Pro $99/mo = 600k credits) — roughly 2-4x
+# the API price for the SAME characters. The engine must price the user's
+# ACTUAL billing route, never a generic "ElevenLabs price".
+#
+# PRICE-DRIFT WARNINGS (announced changes — re-verify the catalog):
+#   * Gemini 3.8 Flash intro pricing DOUBLES on 2027-01-01
+#     ($0.75/$3.75 -> $1.50/$7.50 per 1M tokens).
+#   * OpenAI tts-1 / gpt-4o-mini-tts shutdown reported for 2027-01-06, with a
+#     differently-priced replacement — TTS estimates must be re-priced then.
+#   * Any entry whose verified_at is >60 days old is STALE
+#     (PriceCatalog.is_stale()) and estimates must warn before use.
+# =============================================================================
+version: "2026-10-22.1"
+currency: USD
+verified_at: 2026-10-22
+
+entries:
+  # ------------------------------------------------------------------ LLM ---
+  # Gemini 2.5 Flash-Lite — T0 economy: $0.10 / $0.40 per 1M tokens
+  - provider: google
+    model_or_service: gemini-2.5-flash-lite
+    unit: input_token
+    unit_price_usd: 0.0000001
+    billing_route: api_payg
+    tier: T0
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $0.10/1M input"
+  - provider: google
+    model_or_service: gemini-2.5-flash-lite
+    unit: output_token
+    unit_price_usd: 0.0000004
+    billing_route: api_payg
+    tier: T0
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $0.40/1M output"
+
+  # GPT-5 nano — T0 economy: $0.05 / $0.40 per 1M, cached input $0.005/1M
+  - provider: openai
+    model_or_service: gpt-5-nano
+    unit: input_token
+    unit_price_usd: 0.00000005
+    billing_route: api_payg
+    tier: T0
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $0.05/1M input"
+  - provider: openai
+    model_or_service: gpt-5-nano
+    unit: output_token
+    unit_price_usd: 0.0000004
+    billing_route: api_payg
+    tier: T0
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $0.40/1M output"
+  - provider: openai
+    model_or_service: gpt-5-nano
+    unit: cached_input_token
+    unit_price_usd: 0.000000005
+    billing_route: api_payg
+    tier: T0
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: cached $0.005/1M"
+
+  # Gemini 3.1 Flash-Lite — T1 workhorse: $0.25 / $1.50, cached $0.025 per 1M
+  - provider: google
+    model_or_service: gemini-3.1-flash-lite
+    unit: input_token
+    unit_price_usd: 0.00000025
+    billing_route: api_payg
+    tier: T1
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $0.25/1M input"
+  - provider: google
+    model_or_service: gemini-3.1-flash-lite
+    unit: output_token
+    unit_price_usd: 0.0000015
+    billing_route: api_payg
+    tier: T1
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $1.50/1M output"
+  - provider: google
+    model_or_service: gemini-3.1-flash-lite
+    unit: cached_input_token
+    unit_price_usd: 0.000000025
+    billing_route: api_payg
+    tier: T1
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: cached $0.025/1M"
+
+  # GPT-5 mini — T1 workhorse: $0.25 / $2.00, cached $0.025 per 1M
+  - provider: openai
+    model_or_service: gpt-5-mini
+    unit: input_token
+    unit_price_usd: 0.00000025
+    billing_route: api_payg
+    tier: T1
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $0.25/1M input"
+  - provider: openai
+    model_or_service: gpt-5-mini
+    unit: output_token
+    unit_price_usd: 0.000002
+    billing_route: api_payg
+    tier: T1
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $2.00/1M output"
+  - provider: openai
+    model_or_service: gpt-5-mini
+    unit: cached_input_token
+    unit_price_usd: 0.000000025
+    billing_route: api_payg
+    tier: T1
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: cached $0.025/1M"
+
+  # Claude Haiku 5.5 (<=100k prompts) — T1: $0.10 / $0.50, cache read $0.01/1M
+  - provider: anthropic
+    model_or_service: claude-haiku-5.5
+    unit: input_token
+    unit_price_usd: 0.0000001
+    billing_route: api_payg
+    tier: T1
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $0.10/1M input (<=100k prompts)"
+  - provider: anthropic
+    model_or_service: claude-haiku-5.5
+    unit: output_token
+    unit_price_usd: 0.0000005
+    billing_route: api_payg
+    tier: T1
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $0.50/1M output (<=100k prompts)"
+  - provider: anthropic
+    model_or_service: claude-haiku-5.5
+    unit: cached_input_token
+    unit_price_usd: 0.00000001
+    billing_route: api_payg
+    tier: T1
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: cache read $0.01/1M"
+
+  # GPT-5.4 mini — T2 quality: $0.75 / $4.50, cached $0.075 per 1M
+  - provider: openai
+    model_or_service: gpt-5.4-mini
+    unit: input_token
+    unit_price_usd: 0.00000075
+    billing_route: api_payg
+    tier: T2
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $0.75/1M input"
+  - provider: openai
+    model_or_service: gpt-5.4-mini
+    unit: output_token
+    unit_price_usd: 0.0000045
+    billing_route: api_payg
+    tier: T2
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $4.50/1M output"
+  - provider: openai
+    model_or_service: gpt-5.4-mini
+    unit: cached_input_token
+    unit_price_usd: 0.000000075
+    billing_route: api_payg
+    tier: T2
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: cached $0.075/1M"
+
+  # Claude Haiku 4.5 — T2 quality: $1.00 / $5.00, cache read $0.10/1M
+  - provider: anthropic
+    model_or_service: claude-haiku-4.5
+    unit: input_token
+    unit_price_usd: 0.000001
+    billing_route: api_payg
+    tier: T2
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $1.00/1M input"
+  - provider: anthropic
+    model_or_service: claude-haiku-4.5
+    unit: output_token
+    unit_price_usd: 0.000005
+    billing_route: api_payg
+    tier: T2
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $5.00/1M output"
+  - provider: anthropic
+    model_or_service: claude-haiku-4.5
+    unit: cached_input_token
+    unit_price_usd: 0.0000001
+    billing_route: api_payg
+    tier: T2
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: cache read $0.10/1M"
+
+  # Gemini 3.1 Pro (<=200k) — T3 flagship: $2.00 / $12.00 per 1M
+  - provider: google
+    model_or_service: gemini-3.1-pro
+    unit: input_token
+    unit_price_usd: 0.000002
+    billing_route: api_payg
+    tier: T3
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $2.00/1M input (<=200k)"
+  - provider: google
+    model_or_service: gemini-3.1-pro
+    unit: output_token
+    unit_price_usd: 0.000012
+    billing_route: api_payg
+    tier: T3
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $12.00/1M output (<=200k)"
+
+  # Claude Sonnet 5/5.5 — T3 flagship: $2.00 / $10.00, cache read $0.10-0.20/1M
+  - provider: anthropic
+    model_or_service: claude-sonnet-5.5
+    unit: input_token
+    unit_price_usd: 0.000002
+    billing_route: api_payg
+    tier: T3
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: Claude Sonnet 5/5.5 $2.00/1M input"
+  - provider: anthropic
+    model_or_service: claude-sonnet-5.5
+    unit: output_token
+    unit_price_usd: 0.00001
+    billing_route: api_payg
+    tier: T3
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: Claude Sonnet 5/5.5 $10.00/1M output"
+  - provider: anthropic
+    model_or_service: claude-sonnet-5.5
+    unit: cached_input_token
+    unit_price_usd: 0.0000001
+    billing_route: api_payg
+    tier: T3
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: cache read $0.10-0.20/1M (low end used)"
+
+  # GPT-5 — T3 flagship: $1.25 / $10.00, cached $0.125 per 1M
+  - provider: openai
+    model_or_service: gpt-5
+    unit: input_token
+    unit_price_usd: 0.00000125
+    billing_route: api_payg
+    tier: T3
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $1.25/1M input"
+  - provider: openai
+    model_or_service: gpt-5
+    unit: output_token
+    unit_price_usd: 0.00001
+    billing_route: api_payg
+    tier: T3
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: $10.00/1M output"
+  - provider: openai
+    model_or_service: gpt-5
+    unit: cached_input_token
+    unit_price_usd: 0.000000125
+    billing_route: api_payg
+    tier: T3
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35 verified price base 2026-10-22: cached $0.125/1M"
+
+  # Gemini 3.8 Flash — INTRO pricing $0.75 / $3.75 per 1M.
+  # DRIFT WARNING: intro pricing doubles 2027-01-01 to $1.50 / $7.50 per 1M.
+  - provider: google
+    model_or_service: gemini-3.8-flash
+    unit: input_token
+    unit_price_usd: 0.00000075
+    billing_route: api_payg
+    tier: T2
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap Part 10.2: intro rate $0.75/1M input until 2026-12-31; doubles 2027-01-01"
+  - provider: google
+    model_or_service: gemini-3.8-flash
+    unit: output_token
+    unit_price_usd: 0.00000375
+    billing_route: api_payg
+    tier: T2
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap Part 10.2: intro rate $3.75/1M output until 2026-12-31; doubles 2027-01-01"
+
+  # ------------------------------------------------------------------ TTS ---
+  # Per-character prices; a 10-min video is ~9,000 chars.
+  - provider: microsoft
+    model_or_service: edge-tts
+    unit: tts_char
+    unit_price_usd: 0.0
+    billing_route: free
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: edge-tts $0.00/video (free, unofficial endpoint)"
+  - provider: openai
+    model_or_service: tts-1
+    unit: tts_char
+    unit_price_usd: 0.000015
+    billing_route: api_payg
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: $15/1M chars = ~$0.14 per 10-min video. DRIFT: shutdown reported 2027-01-06"
+  - provider: openai
+    model_or_service: tts-1-hd
+    unit: tts_char
+    unit_price_usd: 0.00003
+    billing_route: api_payg
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: $30/1M chars = ~$0.27 per 10-min video"
+  - provider: openai
+    model_or_service: gpt-4o-mini-tts
+    unit: tts_char
+    unit_price_usd: 0.0000156
+    billing_route: api_payg
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: approx $0.13-0.15 per 10-min video (token-billed; per-char figure is an approximation). DRIFT: shutdown reported 2027-01-06"
+  # ElevenLabs via API (PAYG) — Flash/Turbo $0.04/1k chars, v4/Multilingual v2 $0.08/1k chars
+  - provider: elevenlabs
+    model_or_service: eleven-flash-turbo
+    unit: tts_char
+    unit_price_usd: 0.00004
+    billing_route: api_payg
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: ElevenLabs API Flash/Turbo $0.04/1k chars = $0.36 per 10-min video"
+  - provider: elevenlabs
+    model_or_service: eleven-multilingual-v2
+    unit: tts_char
+    unit_price_usd: 0.00008
+    billing_route: api_payg
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: ElevenLabs API v4/Multilingual v2 $0.08/1k chars = $0.72 per 10-min video"
+  # ElevenLabs via SUBSCRIPTION CREDITS — same characters, ~2-4x the API price.
+  # Effective in-quota rate $0.165-0.20/1k chars (Creator $22/mo = 121k credits).
+  - provider: elevenlabs
+    model_or_service: eleven-flash-turbo
+    unit: tts_char
+    unit_price_usd: 0.0001656
+    billing_route: subscription_credits
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: subscription credits effective ~$1.49 per 10-min video (low end of $1.49-1.80). Price the ACTUAL billing route."
+  - provider: elevenlabs
+    model_or_service: eleven-multilingual-v2
+    unit: tts_char
+    unit_price_usd: 0.0002
+    billing_route: subscription_credits
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: subscription credits effective ~$1.80 per 10-min video (high end of $1.49-1.80). Price the ACTUAL billing route."
+
+  # --------------------------------------------------------------- Images ---
+  - provider: black-forest-labs
+    model_or_service: flux.1-schnell
+    unit: image
+    unit_price_usd: 0.003
+    billing_route: api_payg
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: FLUX.1 [schnell] API (Replicate/fal.ai) ~$0.003/image"
+  - provider: local
+    model_or_service: flux.1-schnell
+    unit: image
+    unit_price_usd: 0.0
+    billing_route: local
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: FLUX.1 [schnell] local (ComfyUI) $0 marginal, GPU time only"
+  - provider: black-forest-labs
+    model_or_service: flux-pro-1.1
+    unit: image
+    unit_price_usd: 0.05
+    billing_route: api_payg
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: FLUX Pro/1.1 Pro API $0.04-0.055/image; $0.05 planning figure"
+  - provider: ideogram
+    model_or_service: ideogram-api
+    unit: image
+    unit_price_usd: 0.06
+    billing_route: api_payg
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: Ideogram ~$0.06/image (best text-in-image; thumbnails only)"
+  - provider: pixabay
+    model_or_service: stock-image
+    unit: image
+    unit_price_usd: 0.0
+    billing_route: free
+    effective_from: 2026-10-22
+    verified_at: 2026-10-22
+    source: "Roadmap sec.35: stock (Pixabay/Pexels) $0, free commercial use; Pixabay is the dependable default for new installs"

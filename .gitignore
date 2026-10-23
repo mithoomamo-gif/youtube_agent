@@ -1,0 +1,175 @@
+# ─── YouTube Agent — .gitignore ──────────────────────────────────────────────
+# Stack: Tauri 2 + React/TypeScript/Vite (src/, src-tauri/)
+#        Python 3.12 FastAPI sidecar (backend/, LangGraph + SQLite)
+#        Bundled FFmpeg, PyInstaller-packaged sidecar
+
+# ─── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+.eggs/
+build/
+develop-eggs/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+
+# ─── Node / Vite / Frontend ──────────────────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ─── Tauri / Rust ────────────────────────────────────────────────────────────
+src-tauri/target/
+src-tauri/Cargo.lock
+# Note: Cargo.lock is normally committed for binaries; uncomment/keep ignored
+# only until the Tauri shell stabilises — see docs/BUILD.md.
+target/
+**/*.rs.bk
+*.pdb
+# Staged sidecar executable (CI build input, signed per release — the
+# directory's README.md is committed, the binary never is)
+src-tauri/binaries/*.exe
+# PyInstaller --onedir bundle tree staged beside the sidecar (525 MB,
+# ~1000 files) and target-triple sidecar binaries for every platform
+# (e.g. agent-backend-x86_64-pc-windows-msvc.exe,
+# agent-backend-x86_64-unknown-linux-gnu) — never committed.
+src-tauri/binaries/agent-backend/
+src-tauri/binaries/agent-backend-*
+src-tauri/binaries/*
+!src-tauri/binaries/README.md
+
+# ─── PyInstaller / sidecar packaging ─────────────────────────────────────────
+build/
+dist-sidecar/
+packaging/dist-sidecar/
+*.spec
+__pypackages__/
+
+# ─── Secrets — NEVER commit ──────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+credentials.json
+credentials*.json
+token.json
+token*.json
+*_token.json
+*_credentials.json
+client_secret*.json
+service-account*.json
+.secrets/
+secrets/
+
+# ─── Media outputs / renders ─────────────────────────────────────────────────
+# Rendered / generated media — regenerated locally, never versioned
+output/
+outputs/
+renders/
+# Render OUTPUT dirs only, anchored to known output roots — a bare
+# `render/` matches at any depth and also swallowed the source package
+# backend/app/pipeline/render/, which must stay tracked.
+/render/
+outputs/**/render/
+backend/outputs/**/render/
+**/.tmp*/**/render/
+projects/
+media/output/
+backend/output/
+backend/renders/
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.avi
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.ogg
+# Keep placeholder / fixture media out by default; force-add explicitly if needed
+
+# ─── Local databases / caches ────────────────────────────────────────────────
+# ML model cache — downloaded on first use (faster-whisper etc.), never committed
+# (models/whisper/ alone is ~323 MB on disk)
+models/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-walsh
+*.db-shm
+*.db-wal
+.cache/
+cache/
+tmp/
+temp/
+*.tmp
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+*.log
+logs/
+backend/logs/
+
+# ─── OS / Editor ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.swp
+*.swo
+*~
+*.code-workspace
+
+# ─── Misc ────────────────────────────────────────────────────────────────────
+# FFmpeg binaries are bundled at packaging time, not committed
+ffmpeg/
+bin/ffmpeg*
+*.zip
+*.7z
+
+# Test scratch outputs
+backend/tests/integration/.tmp_stock_visuals/
+
+# Pytest scratch (workspace-disk basetemp)
+.tmp-yta/
+
+# Round 6 packaging scratch — fetched FFmpeg binaries (never commit)
+packaging/vendor/
+packaging/build-sidecar/

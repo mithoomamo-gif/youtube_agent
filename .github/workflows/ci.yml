@@ -1,0 +1,358 @@
+# =============================================================================
+# CI — YouTube Agent (Windows desktop app)
+#
+# Spec sources:
+#   * MASTER_ROADMAP.md Part 11 (packaging/signing) + Part 12 (timeline / QA)
+#   * roadmap-sections/17_testing_qa.md — CI rules:
+#       - Every PR: L1 unit/contract, L2 (recorded), L3 smoke, L4 short
+#         fixtures, L6 Tier-1/2 QC, L9 security & privacy (hard fail).
+#       - L9 includes grep-based secret scanners on logs / build artefacts.
+#         A leaked key-shaped string is a RELEASE BLOCKER (see secret-scan).
+#       - No retry-to-pass: a flaky test is quarantined, never re-run to green.
+#   * roadmap-sections/36_installer_signing.md — Tauri 2 + React/TS frontend,
+#     Python 3.12 FastAPI sidecar (PyInstaller --onedir), NSIS per-user.
+#
+# Early-repo tolerance: other teams' code (backend/, src/, src-tauri/) lands
+# in parallel, so every job guards on file existence (test -f / hashFiles /
+# package.json script checks) and SKIPS gracefully instead of failing when a
+# piece of the layout has not landed yet. Once a piece exists, its checks are
+# hard failures — the guards never swallow a real failure.
+#
+# Assumed layout (repo root):
+#   backend/            Python sidecar (requirements.txt and/or pyproject.toml)
+#   tests/              pytest suite — registered markers (tests/pytest.ini,
+#                       --strict-markers): unit, contract, integration,
+#                       ffmpeg, live, golden, slow. PR CI excludes live
+#                       (external), slow and golden (nightly) — see below.
+#   package.json        React/TypeScript/Vite frontend (src/)
+#   src-tauri/          Tauri 2 Rust shell (Cargo.toml)
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref — PR CI should never queue behind
+# an outdated commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Python sidecar: lint (ruff), type-check (mypy), tests (pytest)
+  # Roadmap §17: L1 unit & contract tests run on every PR, hard fail.
+  # ---------------------------------------------------------------------------
+  python:
+    name: Python (backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies (if present)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          found=0
+          # requirements-style layouts (repo root or backend/)
+          for req in backend/requirements.txt requirements.txt \
+                     backend/requirements-dev.txt requirements-dev.txt; do
+            if [ -f "$req" ]; then
+              echo "Installing from $req"
+              pip install -r "$req"
+              found=1
+            fi
+          done
+          # pyproject-style layouts (editable install pulls declared deps;
+          # the [dev]/[test] extras carry pytest + pytest-asyncio when defined)
+          for proj in backend/pyproject.toml pyproject.toml; do
+            if [ -f "$proj" ]; then
+              dir="$(dirname "$proj")"
+              echo "Installing project from $proj"
+              pip install -e "${dir}[dev]" || pip install -e "$dir" || pip install "$dir"
+              found=1
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::notice::No requirements.txt / pyproject.toml found yet — skipping dependency install (early repo state)."
+          fi
+          # Test runner is always needed by the pytest step below.
+          python -c "import pytest" 2>/dev/null || pip install pytest
+
+      - name: Ruff (lint) — only if configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ruff counts as "configured" if any of its config homes exist or a
+          # [tool.ruff] / ruff dependency is declared in a pyproject/requirements.
+          configured=0
+          for f in ruff.toml .ruff.toml backend/ruff.toml backend/.ruff.toml; do
+            [ -f "$f" ] && configured=1
+          done
+          for f in pyproject.toml backend/pyproject.toml \
+                   setup.cfg backend/setup.cfg \
+                   requirements.txt backend/requirements.txt \
+                   backend/requirements-dev.txt requirements-dev.txt; do
+            if [ -f "$f" ] && grep -Eq 'tool\.ruff|(^|[^a-zA-Z])ruff([^a-zA-Z]|$)' "$f"; then
+              configured=1
+            fi
+          done
+          if [ "$configured" -eq 0 ]; then
+            echo "::notice::Ruff is not configured in this repo yet — skipping lint."
+            exit 0
+          fi
+          python -c "import ruff" 2>/dev/null || pip install ruff
+          # Lint whichever trees exist.
+          targets=""
+          for d in backend src tests; do [ -d "$d" ] && targets="$targets $d"; done
+          [ -z "$targets" ] && targets="."
+          echo "Running: ruff check $targets"
+          python -m ruff check $targets
+
+      - name: Mypy (type-check) — only if configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Mypy counts as "configured" via mypy.ini/.mypy.ini, a [tool.mypy]
+          # section, setup.cfg [mypy], or a declared mypy dependency.
+          configured=0
+          for f in mypy.ini .mypy.ini backend/mypy.ini backend/.mypy.ini; do
+            [ -f "$f" ] && configured=1
+          done
+          for f in pyproject.toml backend/pyproject.toml \
+                   setup.cfg backend/setup.cfg \
+                   requirements.txt backend/requirements.txt \
+                   backend/requirements-dev.txt requirements-dev.txt; do
+            if [ -f "$f" ] && grep -Eq 'tool\.mypy|\[mypy|mypy' "$f"; then
+              configured=1
+            fi
+          done
+          if [ "$configured" -eq 0 ]; then
+            echo "::notice::Mypy is not configured in this repo yet — skipping type-check."
+            exit 0
+          fi
+          python -c "import mypy" 2>/dev/null || pip install mypy
+          targets=""
+          for d in backend; do [ -d "$d" ] && targets="$targets $d"; done
+          [ -z "$targets" ] && targets="."
+          echo "Running: mypy $targets"
+          python -m mypy $targets
+
+      - name: Pytest — hermetic PR suite (live / slow / golden excluded)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d tests ] && [ ! -d backend/tests ]; then
+            echo "::notice::No tests/ directory yet — skipping pytest (early repo state)."
+            exit 0
+          fi
+          # Marker strategy (roadmap §17 + tests/pytest.ini, which registers
+          # unit/contract/integration/ffmpeg/live/golden/slow and enables
+          # --strict-markers, so ONLY registered marker names may appear in
+          # -m expressions):
+          #   live   — real provider keys + network (external; weekly only)
+          #   slow   — soak / long renders (nightly/weekly)
+          #   golden — L3/L5 golden evals & video regression (nightly/release)
+          # ffmpeg-marked tests stay in the PR run: tests/conftest.py
+          # auto-skips them when no ffmpeg binary is on PATH.
+          # The expression only EXCLUDES markers, so unmarked tests are still
+          # selected — fallback-safe as suites grow. (An explicit -m on the
+          # command line overrides the "-m not live" in tests/pytest.ini
+          # addopts, hence all three exclusions are spelled out here.)
+          # Tests themselves skip gracefully when optional modules are absent.
+          if [ -d tests ]; then
+            echo "Running: python -m pytest tests/ -q -m \"not live and not slow and not golden\""
+            python -m pytest tests/ -q -m "not live and not slow and not golden"
+          fi
+          # The backend's own suite (backend/tests/, configured by
+          # backend/pytest.ini) runs in its own directory context. Its config
+          # registers no markers, so keep its expression to "not live" only.
+          if [ -d backend/tests ]; then
+            echo "Running: (cd backend && python -m pytest tests/ -q -m \"not live\")"
+            (cd backend && python -m pytest tests/ -q -m "not live")
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Frontend: React / TypeScript / Vite (src/)
+  # Roadmap §17: L1 for the UI is Vitest + tsc via the package scripts.
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend (React / TS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies (npm ci if lockfile, else npm install)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f package.json ]; then
+            echo "::notice::No package.json at repo root yet — skipping frontend install (early repo state)."
+            exit 0
+          fi
+          if [ -f package-lock.json ]; then
+            echo "package-lock.json found — running: npm ci"
+            npm ci
+          else
+            echo "No package-lock.json — running: npm install"
+            npm install
+          fi
+
+      - name: Typecheck (only if a typecheck script exists)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f package.json ]; then
+            echo "::notice::No package.json — skipping typecheck."
+            exit 0
+          fi
+          # Check package.json via node so a missing script skips gracefully
+          # instead of failing with npm's "Missing script" error.
+          if node -e "const s=(require('./package.json').scripts||{}); process.exit(s.typecheck ? 0 : 1)"; then
+            npm run typecheck
+          elif node -e "const s=(require('./package.json').scripts||{}); process.exit(s['type-check'] ? 0 : 1)"; then
+            npm run type-check
+          else
+            echo "::notice::No typecheck script in package.json — skipping."
+          fi
+
+      - name: Build (Vite production build)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f package.json ]; then
+            echo "::notice::No package.json — skipping build."
+            exit 0
+          fi
+          if node -e "const s=(require('./package.json').scripts||{}); process.exit(s.build ? 0 : 1)"; then
+            npm run build
+          else
+            echo "::notice::No build script in package.json — skipping."
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Tauri shell compile check — PLACEHOLDER job.
+  # Purpose for now: prove the Rust toolchain + Tauri prerequisites install on
+  # windows-latest and that src-tauri compiles (cargo check) once it lands.
+  # The real signed build lives in release.yml (roadmap Part 11 / §36).
+  # ---------------------------------------------------------------------------
+  tauri-build-check:
+    name: Tauri build check (placeholder)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # windows-latest runners already ship the Microsoft C++ Build Tools and
+      # the WebView2 runtime Tauri 2 needs; nothing extra to install for a
+      # `cargo check`. If a future Tauri plugin needs additional prerequisites,
+      # add them here (this step is the placeholder for that list).
+      - name: Tauri prerequisites (placeholder)
+        shell: pwsh
+        run: |
+          Write-Host "windows-latest provides MSVC Build Tools + WebView2 out of the box."
+          Write-Host "Placeholder: add any extra Tauri prerequisites here as the shell grows."
+
+      - name: cargo check (src-tauri) — only if Cargo.toml exists
+        if: hashFiles('src-tauri/Cargo.toml') != ''
+        shell: pwsh
+        working-directory: src-tauri
+        run: cargo check
+
+      - name: Skip notice (src-tauri not landed yet)
+        if: hashFiles('src-tauri/Cargo.toml') == ''
+        shell: pwsh
+        run: Write-Host "::notice::src-tauri/Cargo.toml not present yet — skipping cargo check (early repo state)."
+
+  # ---------------------------------------------------------------------------
+  # Secret scan — L9 security & privacy (roadmap §17), release blocker.
+  # Fails the build if a key-shaped string appears in any tracked file:
+  #   * OpenAI-style keys        sk-...
+  #   * Google API keys          AIza...
+  #   * api_key = "..." style literal assignments (any provider)
+  #   * PEM private-key headers
+  # Placeholder / example / templated values (your-*, example, dummy/fake,
+  # ${{ ... }}, secrets.*, process.env, os.environ, <...>) are filtered out,
+  # as are lines carrying the repo's own "secret-scan: allow" marker.
+  # Exclusions mirror the in-repo L9 scanner (tests/contract/
+  # test_no_secrets_in_repo.py, which authoritatively scans backend/, src/
+  # and prompts/ on every PR via the python job above):
+  #   .github/workflows/* — contains these patterns as regular expressions
+  #   tests/*             — the scanner's positive-control fixtures
+  #                         legitimately contain key-shaped dummy strings
+  #                         (a gate must prove it can say NO — section 17)
+  # ---------------------------------------------------------------------------
+  secret-scan:
+    name: Secret scan (L9)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Grep tracked files for key-shaped strings
+        shell: bash
+        run: |
+          set -uo pipefail
+          # Patterns are assembled in pieces so this file never contains a
+          # literal key-shaped string itself.
+          SK='sk-[A-Za-z0-9_-]{20,}'
+          GOOGLE='AIza[0-9A-Za-z_-]{35}'
+          ASSIGN='(api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token)[[:space:]]*[:=][[:space:]]*["'\''][^"'\'']{8,}["'\'']'
+          PEM='BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY'
+          PATTERN="${SK}|${GOOGLE}|${ASSIGN}|${PEM}"
+
+          # git grep searches tracked files only. Exclusions:
+          #   .github/workflows/*  — contains these regexes by design
+          #   tests/*              — L9 scanner positive-control fixtures
+          #   *.lock / package-lock.json / binary & minified artefacts
+          # Lines with the repo's "secret-scan: allow" marker are also let
+          # through, matching the in-repo scanner's convention.
+          hits="$(git grep -n -I -E "$PATTERN" -- \
+            ':!.github/workflows/*' \
+            ':!tests/*' \
+            ':!*.lock' ':!package-lock.json' ':!*.min.js' ':!*.map' \
+            2>/dev/null \
+            | grep -Ev 'secret-scan: allow|your[-_]|example|dummy|fake|sample|placeholder|changeme|xxxx|\$\{\{|secrets\.|process\.env|os\.environ|getenv|REDACTED|<[A-Z_]+>' \
+            || true)"
+
+          if [ -n "$hits" ]; then
+            echo "::error::Secret scan FAILED — key-shaped strings found in tracked files."
+            echo "Roadmap section 17 (L9): a leaked key is a release blocker. Remove the"
+            echo "secret, rotate it if it was ever real, and load it from the OS credential"
+            echo "store / CI secrets instead of committing it."
+            echo "$hits"
+            exit 1
+          fi
+          echo "Secret scan passed — no key-shaped strings in tracked files."

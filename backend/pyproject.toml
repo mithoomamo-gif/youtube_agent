@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "youtube-agent-backend"
+version = "0.1.0"
+description = "YouTube Agent — Python FastAPI sidecar backend (loopback-only, launch-token authenticated)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "python-multipart",
+    "uvicorn[standard]",
+    "pydantic>=2",
+    "keyring",
+    "httpx>=0.27",
+    "alembic",
+    "sqlalchemy",
+    "langgraph",
+    "langgraph-checkpoint-sqlite",
+    "PyYAML>=6",
+    "Pillow>=10",
+    "edge-tts>=7",
+]
+
+[project.optional-dependencies]
+# Real transcription (Round 2): faster-whisper powers the subtitles
+# pipeline's real path via app.providers.transcription. Kept optional
+# because it pulls heavy native wheels (ctranslate2/onnxruntime) and
+# model weights are downloaded separately into <repo>/models/whisper/.
+transcription = [
+    "faster-whisper>=1.0",
+    # faster-whisper 1.2.1's decode_audio passes metadata_errors= to
+    # av.open(), which PyAV removed after 13.x (verified broken on
+    # av 19, verified working on av 13.1.0 — Round 2 integration).
+    "av>=12,<14",
+]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+# Alias kept for other teams that installed the `test` extra.
+test = [
+    "pytest>=8",
+    "pytest-asyncio",
+]
+
+[project.scripts]
+youtube-agent-backend = "app.main:run"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+# NOTE: a legacy backend/pytest.ini also exists (another team's file). When
+# present, pytest prefers pytest.ini over this section; both set
+# testpaths=["tests"]. Keep the two in sync.
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "live: tests that hit real external services over the network (opt-in: run with -m live)",
+]

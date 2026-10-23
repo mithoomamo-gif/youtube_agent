@@ -1,0 +1,30 @@
+# Global pronunciation dictionary — layer 1 of 3 (global / per-niche / per-channel).
+# Entry = surface, alias (respelt form for weak providers), ipa,
+# mechanisms per provider. Dictionary version is part of the chunk cache key.
+version: "1"
+entries:
+  - surface: "YouTube"
+    lang: en
+    alias: "You Tube"
+    ipa: "ˈjuːtjuːb"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}
+  - surface: "WhatsApp"
+    lang: en
+    alias: "Whats App"
+    ipa: "ˈwɒtsæp"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}
+  - surface: "AI"
+    lang: en
+    alias: "A I"
+    ipa: "eɪ aɪ"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}
+  - surface: "حضرت یوسف"
+    lang: ur
+    alias: "Hazrat Yousuf"
+    ipa: "həzˈɾət̪ ˈjuːsʊf"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}
+  - surface: "کرکٹ"
+    lang: ur
+    alias: "cricket"
+    ipa: "ˈkɾɪkɪʈ"
+    mechanisms: {azure: phoneme, google: custom_pronunciations, elevenlabs: dictionary, openai: alias, edge: alias}

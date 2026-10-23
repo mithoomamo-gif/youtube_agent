@@ -1,0 +1,1142 @@
+# =============================================================================
+# Release — YouTube Agent (Windows desktop app) — PRODUCTION WORKFLOW
+#
+# This is the real release pipeline (Round 6). It replaces the Round 1–5
+# skeleton: the job graph, the release gate, the inside-out signing sequence
+# and the manifest/draft-release steps below are all live. Signing itself is
+# keyed off CI secrets BY NAME ONLY — no certificate, key, password, or secret
+# value is stored in this repository, printed in any log, or embedded in any
+# artefact produced here.
+#
+# Secret names (configure in Settings -> Secrets -> Actions):
+#   Authenticode — Option A, Azure Artifact Signing (formerly Trusted
+#   Signing; roadmap Part 11.3, preferred when the publisher is eligible):
+#     AZURE_ARTIFACT_SIGNING_ENDPOINT
+#     AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME
+#     AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME
+#     AZURE_ARTIFACT_SIGNING_TENANT_ID
+#     AZURE_ARTIFACT_SIGNING_CLIENT_ID
+#     AZURE_ARTIFACT_SIGNING_CLIENT_SECRET
+#   Authenticode — Option B, OV certificate in cloud HSM / PFX (fallback):
+#     WINDOWS_CERT_BASE64_PFX
+#     WINDOWS_CERT_PASSWORD
+#     WINDOWS_CERT_THUMBPRINT
+#   Tauri updater (minisign) — LOSING THIS KEY ORPHANS THE INSTALLED BASE
+#   (roadmap Part 11.4): keep an offline escrow copy and verify a SECOND
+#   team member can recover it before every release (Part 11.8 #5).
+#     TAURI_SIGNING_PRIVATE_KEY
+#     TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#   The backend package manifest (backend.json) uses a SEPARATE minisign
+#   keypair from the Tauri updater key (Part 11.5); it is emitted here with
+#   an empty signature until that key is wired in the release environment.
+#
+# Signing order is NON-NEGOTIABLE and INSIDE-OUT (MASTER_ROADMAP Part 11.3 /
+# 11.8; docs/BUILD.md section 5.1; docs/RELEASE.md section 1.1):
+#   build UI -> PyInstaller sidecar (--onedir) -> sign INNER binaries first
+#   (SHA-256 + RFC 3161 timestamp) -> tauri build -> sign installer +
+#   updater artefacts -> verify (signtool verify /pa /all) -> emit
+#   latest.json + backend.json.
+# A signature on the outer installer does NOT cover its contents — the
+# inside-out order is the whole point.
+#
+# STRUCTURE DECISION (why signing is split across two jobs):
+# True inside-out ordering requires the inner binaries to be signed BEFORE
+# `tauri build` bundles them into the NSIS installer. Artefacts handed
+# between jobs via upload/download have already been bundled, so inner
+# signing CANNOT live in a later job. Therefore:
+#   * the `build` job performs the full sequence build UI -> sidecar ->
+#     FFmpeg -> SIGN INNER BINARIES -> verify inner signatures ->
+#     tauri build, strictly sequentially on one runner;
+#   * the `sign` job (needs: build) then signs the OUTER artefacts the
+#     bundle produced (NSIS installer, which is also the Tauri updater
+#     artefact for the NSIS target) and runs the verification gate.
+# No unsigned intermediate artefact ever crosses a job boundary before
+# bundling: what crosses is the finished bundle.
+#
+# UNSIGNED BEHAVIOUR: if no Authenticode secrets are configured, the
+# pipeline still builds, but the `sign` job emits a LOUD ::warning:: and a
+# step-summary banner stating the artefacts are UNSIGNED and MUST NOT be
+# published as a signed release, skips every signing step, and forwards
+# the artefacts unchanged with an UNSIGNED marker file. Nothing in this
+# workflow ever labels an unsigned artefact as signed.
+#
+# Rollout (Part 11.6 / docs/RELEASE.md section 2): releases start at Ring 0
+# (internal, >=24h soak, smoke suite green) then Ring 1 (beta opt-ins + 5%
+# deterministic slice, 48h soak; gates: update success >=98%, crash-free
+# >=99%, zero attributable sidecar-health failures) before Ring 2 / Ring 3
+# promotion. Ring promotion is a SERVER/manifest configuration change, not
+# a new build; halting a rollout = freezing manifest promotion. This
+# workflow only produces Ring 0/1 artefacts and a DRAFT GitHub Release —
+# a human publishes and promotes per the runbook (docs/RELEASE.md).
+#
+# Supply-chain hygiene: every action below is pinned to a major-version
+# tag (e.g. @v4, @v5, @v1, @v0) — never a floating branch. Bump pins
+# deliberately, after reviewing the upstream changelog; a full-SHA pin may
+# replace any major tag without changing the job structure.
+#
+# Secret hygiene: no step echoes secret values, prints the environment, or
+# enables shell tracing (no Set-PSDebug / set -x) around secret usage.
+# Secrets reach steps only through `env:` / action inputs mapped from the
+# secret NAMES above; GitHub masks registered secret values in logs.
+#
+# Permissions: the workflow defaults to contents: read. ONLY the
+# manifest+release job — the one that creates the draft GitHub Release —
+# is granted contents: write.
+# =============================================================================
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 0.1.0). Leave empty to use the tag / tauri.conf.json version."
+        required: false
+        type: string
+      ring:
+        description: "Initial rollout ring for this release (promotion beyond Ring 1 is manual — see header)."
+        required: true
+        type: choice
+        options:
+          - "Ring 0"
+          - "Ring 1"
+        default: "Ring 0"
+      publish:
+        description: "Create a DRAFT GitHub Release from the built artefacts (tag builds always create one; a human publishes it)."
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+# A release must never race another run for the same version/tag, and must
+# never be cancelled mid-signing by a newer run. Tag pushes key off the tag
+# name; manual runs key off the requested version.
+concurrency:
+  group: release-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Detect which signing secrets are wired, without printing any value.
+  # Everything downstream keys off these booleans. This job is the gate the
+  # skeleton established; the `sign` job re-probes in-job before signing.
+  # ---------------------------------------------------------------------------
+  check-secrets:
+    name: Check signing secrets
+    runs-on: windows-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      has_azure_signing: ${{ steps.probe.outputs.has_azure_signing }}
+      has_windows_cert: ${{ steps.probe.outputs.has_windows_cert }}
+      has_authenticode: ${{ steps.probe.outputs.has_authenticode }}
+      has_tauri_signing: ${{ steps.probe.outputs.has_tauri_signing }}
+      has_any_signing: ${{ steps.probe.outputs.has_any_signing }}
+    steps:
+      - name: Probe secret presence (values are never echoed)
+        id: probe
+        shell: pwsh
+        env:
+          AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_ARTIFACT_SIGNING_TENANT_ID: ${{ secrets.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
+          AZURE_ARTIFACT_SIGNING_CLIENT_ID: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
+          AZURE_ARTIFACT_SIGNING_CLIENT_SECRET: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_SECRET }}
+          WINDOWS_CERT_BASE64_PFX: ${{ secrets.WINDOWS_CERT_BASE64_PFX }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          WINDOWS_CERT_THUMBPRINT: ${{ secrets.WINDOWS_CERT_THUMBPRINT }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          # Partial configuration reports 'not configured' and surfaces as
+          # the loud UNSIGNED path below — failing loud early instead of
+          # inside the signing action. Azure requires ALL six secrets;
+          # the OV path requires PFX + password (a thumbprint alone
+          # cannot sign in CI).
+          $azure = -not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_ENDPOINT) `
+                   -and -not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME) `
+                   -and -not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME) `
+                   -and -not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_TENANT_ID) `
+                   -and -not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_CLIENT_ID) `
+                   -and -not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_CLIENT_SECRET)
+          $cert  = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_BASE64_PFX) `
+                   -and -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_PASSWORD)
+          $tauri = -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)
+          "has_azure_signing=$($azure.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "has_windows_cert=$($cert.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "has_authenticode=$(($azure -or $cert).ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "has_tauri_signing=$($tauri.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "has_any_signing=$(($azure -or $cert -or $tauri).ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          if (-not ($azure -or $cert -or $tauri)) {
+            Write-Host "::warning::No signing secrets are configured. The pipeline will build, but artefacts will be UNSIGNED and the sign job will banner them as NOT publishable as a signed release. Wire the AZURE_ARTIFACT_SIGNING_* / WINDOWS_CERT_* and TAURI_SIGNING_* secrets to produce a signed release."
+          } else {
+            Write-Host "Signing configuration detected (Azure=$azure, WindowsCert=$cert, TauriUpdater=$tauri)."
+          }
+
+  # ---------------------------------------------------------------------------
+  # Preflight: packaging/preflight.ps1 (owned by the packaging team) checks
+  # the runner, the repo layout and the release prerequisites before any
+  # expensive work starts. A missing script is a hard failure — a release
+  # does not proceed without its preflight gate.
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Preflight
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run packaging/preflight.ps1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Test-Path "packaging/preflight.ps1")) {
+            Write-Host "::error::packaging/preflight.ps1 is missing. It is a required release dependency (owned by the packaging team); refusing to release without the preflight gate."
+            exit 1
+          }
+          & ./packaging/preflight.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Preflight passed."
+
+  # ---------------------------------------------------------------------------
+  # Release gate: the full test evidence a release is allowed to ship on.
+  # Baselines (Round 5, commit c99e10e) that must not regress: backend suite
+  # 2187 passed, root suite 44 passed / 1 skipped, UI typecheck + build
+  # green. This gate FAILS the release on ANY failure outside the documented
+  # Windows skip list (packaging/windows-test-skips.txt, owned by the
+  # packaging team): each line of that file is a pytest node id, excluded
+  # here exclusively via --deselect after being matched against the actual
+  # collected test ids. The file is consumed if present and its absence is
+  # tolerated (full suites run, nothing excused).
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Verify (release gate)
+    needs: preflight
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # No engines field in package.json and no .nvmrc in the repo, so the
+      # release builds on the same LTS line as CI (Node 20) — the line the
+      # baselines above were measured on. Bump deliberately, with CI.
+      - name: Set up Node 20 (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      # backend/pyproject.toml requires Python >=3.12 — pin the line.
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install frontend dependencies (npm ci)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path "package-lock.json") { npm ci } else { npm install }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: UI typecheck
+        shell: pwsh
+        run: |
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: UI build
+        shell: pwsh
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install backend dependencies + pytest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $found = $false
+          foreach ($req in @("backend/requirements.txt", "requirements.txt", "backend/requirements-dev.txt", "requirements-dev.txt")) {
+            if (Test-Path $req) {
+              Write-Host "Installing from $req"
+              pip install -r $req
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $found = $true
+            }
+          }
+          if (Test-Path "backend/pyproject.toml") {
+            pip install -e "backend[dev]"
+            if ($LASTEXITCODE -ne 0) { pip install -e backend }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $found = $true
+          } elseif (Test-Path "pyproject.toml") {
+            pip install -e ".[dev]"
+            if ($LASTEXITCODE -ne 0) { pip install -e . }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $found = $true
+          }
+          if (-not $found) { throw "No backend requirements.txt / pyproject.toml found — the release gate cannot run without the backend." }
+          python -c "import pytest" 2>$null
+          if ($LASTEXITCODE -ne 0) { pip install pytest; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+
+      - name: Backend + root test suites (Windows skip list applied)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # --- Load the documented Windows skip list, if it has landed. ---
+          $skipFile = "packaging/windows-test-skips.txt"
+          $skipIds = @()
+          if (Test-Path $skipFile) {
+            $skipIds = @(Get-Content $skipFile | ForEach-Object {
+              # File format is "<node-id>  # <reason>": strip everything
+              # from the first " #" onward before matching; blank lines
+              # and pure comment lines are skipped below.
+              $line = "$_"
+              $hashIdx = $line.IndexOf(" #")
+              if ($hashIdx -ge 0) { $line = $line.Substring(0, $hashIdx) }
+              $line.Trim()
+            } | Where-Object { $_ -ne "" -and -not $_.StartsWith("#") })
+            Write-Host "Windows skip list: $($skipIds.Count) entr(ies) loaded from $skipFile. Each is a pytest node id and is excused ONLY via --deselect; nothing else is excused."
+          } else {
+            Write-Host "::warning::$skipFile is not present yet (packaging-team dependency) — running the full suites with zero Windows deselections."
+          }
+          $matchedSkip = @{}
+          function Invoke-GatedSuite {
+            param([string]$Label, [string]$WorkDir, [string]$MarkExpr)
+            Write-Host "=== Release gate suite: $Label (marks: $MarkExpr) ==="
+            Push-Location $WorkDir
+            try {
+              # Collect first so every --deselect names a node id that
+              # actually exists in THIS suite's collection on THIS runner;
+              # a skip entry that matches nothing is reported, never
+              # silently swallowed.
+              $collectOut = & python -m pytest tests/ --collect-only -q -m $MarkExpr 2>&1
+              if ($LASTEXITCODE -ne 0) { throw "Test collection failed for $Label (exit $LASTEXITCODE)." }
+              $collected = @($collectOut | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '\.py::' })
+              $deselects = @()
+              foreach ($entry in $skipIds) {
+                $hit = $collected | Where-Object { $_ -eq $entry -or $entry.EndsWith($_) -or $_.EndsWith($entry) } | Select-Object -First 1
+                if ($hit) { $deselects += $hit; $matchedSkip[$entry] = $true }
+              }
+              $deselects = @($deselects | Select-Object -Unique)
+              if ($deselects.Count -gt 0) { Write-Host "Applying $($deselects.Count) documented Windows deselection(s) to $Label." }
+              $pytestArgs = @("-m", "pytest", "tests/", "-q", "-m", $MarkExpr)
+              foreach ($d in $deselects) { $pytestArgs += "--deselect"; $pytestArgs += $d }
+              Write-Host "Running: python $($pytestArgs -join ' ')"
+              & python @pytestArgs
+              if ($LASTEXITCODE -ne 0) {
+                throw "RELEASE GATE FAILED — $Label exited $LASTEXITCODE. Any test failure outside the documented Windows skip list blocks the release."
+              }
+              Write-Host "Suite passed: $Label"
+            } finally { Pop-Location }
+          }
+          # Backend suite: backend/pytest.ini registers only the `live`
+          # marker (same expression CI uses for this suite).
+          Invoke-GatedSuite -Label "backend suite (backend/tests)" -WorkDir "backend" -MarkExpr "not live"
+          # Root suite: tests/pytest.ini registers unit/contract/
+          # integration/ffmpeg/live/golden/slow (same expression CI uses).
+          Invoke-GatedSuite -Label "root suite (tests/)" -WorkDir "." -MarkExpr "not live and not slow and not golden"
+          foreach ($entry in $skipIds) {
+            if (-not $matchedSkip.ContainsKey($entry)) {
+              Write-Host "::warning::Skip-list entry matched no collected test in either suite (stale entry?): $entry"
+            }
+          }
+          Write-Host "Release gate: all suites green."
+
+  # ---------------------------------------------------------------------------
+  # Build + sign INNER binaries + tauri build, in the Part 11.8 order.
+  # Single job on purpose: the inside-out sequence must be strictly
+  # sequential on one runner so the inner binaries are already signed at
+  # the moment `tauri build` bundles them (see the header structure
+  # decision). The `sign` job below handles the outer artefacts.
+  #
+  # WebView2: tauri.conf.json sets bundle.windows.webviewInstallMode to
+  # embedBootstrapper, so the NSIS installer embeds the WebView2
+  # bootstrapper (+~1.8 MB; the runtime itself is downloaded at install
+  # time on Windows 10 and is pre-installed on Windows 11). The runner
+  # needs no WebView2 step of its own: windows-latest ships the runtime,
+  # the MSVC Build Tools and the Windows SDK (signtool).
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build + sign inner binaries + Tauri bundle
+    needs: [verify, check-secrets]
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node 20 (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust (stable, x86_64-pc-windows-msvc)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-pc-windows-msvc
+          # Release builds compile clean for reproducibility; PR-time
+          # compile caching lives in ci.yml, not in the signed pipeline.
+          cache: false
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $null
+          if ($env:GITHUB_REF -like "refs/tags/v*") {
+            $version = $env:GITHUB_REF_NAME -replace "^v", ""
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:INPUT_VERSION)) {
+            $version = $env:INPUT_VERSION -replace "^v", ""
+          } elseif (Test-Path "src-tauri/tauri.conf.json") {
+            # tauri.conf.json may carry a literal version or a Tauri path
+            # reference (e.g. "../package.json"); a path reference is
+            # resolved relative to src-tauri/ and the referenced file's
+            # version is used.
+            $tauriVersion = (Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+            if ($tauriVersion -like "../*" -or $tauriVersion -like "*.json") {
+              $refPath = Join-Path "src-tauri" $tauriVersion
+              if (-not (Test-Path $refPath)) { throw "tauri.conf.json version references '$tauriVersion' but the referenced file was not found: $refPath" }
+              $version = (Get-Content $refPath -Raw | ConvertFrom-Json).version
+            } else {
+              $version = $tauriVersion
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($version)) { throw "Could not resolve a release version from the tag, the workflow input, or src-tauri/tauri.conf.json." }
+          if ($version -notmatch '^\d+\.\d+\.\d+') { throw "Resolved version '$version' is empty or not semver-shaped (expected X.Y.Z) — refusing to build with a corrupt version." }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Release version: $version"
+
+      - name: Install frontend dependencies (npm ci)
+        shell: pwsh
+        run: |
+          if (Test-Path "package-lock.json") { npm ci } else { npm install }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # --- Inside-out 1/5: build UI -----------------------------------------
+      # tauri.conf.json also wires this as beforeBuildCommand, so `tauri
+      # build` re-runs it; the explicit step keeps the documented order
+      # visible and fails UI problems before any packaging work starts.
+      - name: "Inside-out 1/5 — Build UI (Vite production build)"
+        shell: pwsh
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install backend build dependencies + PyInstaller
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pip install pyinstaller
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path "backend/requirements.txt") { pip install -r backend/requirements.txt }
+          elseif (Test-Path "requirements.txt") { pip install -r requirements.txt }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path "backend/pyproject.toml") { pip install ./backend }
+          elseif (Test-Path "pyproject.toml") { pip install . }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # --- Inside-out 2/5: PyInstaller sidecar, --onedir ONLY ----------------
+      # --onedir is mandatory (Part 11.1): --onefile unpacks to %TEMP% on
+      # every launch (slow starts + AV false positives) and its files
+      # cannot be Authenticode-signed individually. The freeze itself —
+      # including staging the --onedir tree and the target-triple-named
+      # externalBin (agent-backend-x86_64-pc-windows-msvc.exe) where
+      # tauri.conf.json expects it — is owned by the freeze team's script;
+      # this workflow only invokes it.
+      - name: "Inside-out 2/5 — Build Python sidecar via packaging/build_sidecar.ps1 (PyInstaller --onedir)"
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Test-Path "packaging/build_sidecar.ps1")) {
+            Write-Host "::error::packaging/build_sidecar.ps1 is missing. It is a required release dependency (owned by the freeze team); there is no sidecar to bundle without it."
+            exit 1
+          }
+          & ./packaging/build_sidecar.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Sidecar built and staged by packaging/build_sidecar.ps1."
+
+      # --- Stage pinned FFmpeg ------------------------------------------------
+      # The pin file (packaging team) records the exact upstream asset and
+      # its SHA-256. Consumed if present: download the pinned asset, verify
+      # its SHA-256 against the pin (a mismatch fails the build), and stage
+      # ffmpeg.exe / ffprobe.exe to src-tauri/binaries/ffmpeg/ — the repo's
+      # staging convention, from where the bundler resources place them in
+      # the installed app's runtime\ folder (docs/BUILD.md section 3).
+      - name: Stage pinned FFmpeg (packaging/ffmpeg-pin.json)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pinPath = "packaging/ffmpeg-pin.json"
+          if (-not (Test-Path $pinPath)) {
+            Write-Host "::warning::packaging/ffmpeg-pin.json is not present yet (packaging-team dependency) — no pinned FFmpeg will be staged for this build. docs/BUILD.md requires the FFmpeg build pinned (version + SHA-256 in the build manifest) before the first public release."
+            exit 0
+          }
+          $pin = Get-Content $pinPath -Raw | ConvertFrom-Json
+          $url = $pin.url
+          if ([string]::IsNullOrWhiteSpace($url)) { $url = $pin.downloadUrl }
+          if ([string]::IsNullOrWhiteSpace($url)) { $url = $pin.download_url }
+          $sha = $pin.sha256
+          if ([string]::IsNullOrWhiteSpace($sha)) { $sha = $pin.sha256sum }
+          if ([string]::IsNullOrWhiteSpace($sha)) { $sha = $pin.hash }
+          if ([string]::IsNullOrWhiteSpace($url) -or [string]::IsNullOrWhiteSpace($sha)) {
+            throw "packaging/ffmpeg-pin.json must carry a download URL and a SHA-256 (fields: url/downloadUrl, sha256). Refusing to stage an unpinned FFmpeg."
+          }
+          if ($url -notlike "https://*") { throw "Pinned FFmpeg URL must be https: $url" }
+          $archive = Join-Path $env:RUNNER_TEMP "ffmpeg-pinned-asset"
+          Write-Host "Downloading pinned FFmpeg asset..."
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $sha.ToLower()) { throw "FFmpeg SHA-256 mismatch — pin says $sha, downloaded asset hashes to $actual. Refusing to stage it." }
+          Write-Host "FFmpeg asset SHA-256 verified against the pin."
+          $extract = Join-Path $env:RUNNER_TEMP "ffmpeg-pinned-extract"
+          New-Item -ItemType Directory -Force -Path $extract | Out-Null
+          if ($url -match '\.zip($|\?)') {
+            Expand-Archive -Path $archive -DestinationPath $extract -Force
+          } elseif ($url -match '\.7z($|\?)') {
+            throw "The pinned FFmpeg asset is a .7z archive, which this step cannot extract on the runner. Pin a .zip asset in packaging/ffmpeg-pin.json."
+          } else {
+            Copy-Item $archive (Join-Path $extract "ffmpeg.exe") -Force
+          }
+          $ffmpegExe = Get-ChildItem $extract -Recurse -Filter "ffmpeg.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $ffmpegExe) { throw "The pinned FFmpeg asset contained no ffmpeg.exe." }
+          $ffprobeExe = Get-ChildItem $extract -Recurse -Filter "ffprobe.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path "src-tauri/binaries/ffmpeg" | Out-Null
+          Copy-Item $ffmpegExe.FullName "src-tauri/binaries/ffmpeg/ffmpeg.exe" -Force
+          if ($null -ne $ffprobeExe) {
+            Copy-Item $ffprobeExe.FullName "src-tauri/binaries/ffmpeg/ffprobe.exe" -Force
+          } else {
+            Write-Host "::warning::Pinned FFmpeg asset contained no ffprobe.exe — staging ffmpeg.exe only."
+          }
+          $pinVersion = $pin.version
+          if ([string]::IsNullOrWhiteSpace($pinVersion)) { $pinVersion = $pin.ffmpegVersion }
+          Write-Host "Staged pinned FFmpeg (pin version: $pinVersion) to src-tauri/binaries/ffmpeg/."
+
+      # --- Inside-out 3/5: sign INNER binaries FIRST --------------------------
+      # SHA-256 file digest + RFC 3161 timestamp, always. Without a
+      # timestamp the signature dies with the certificate. Azure Artifact
+      # Signing is preferred (Part 11.3); the OV PFX/thumbprint path is the
+      # fallback. The inner set = every PE file that will be bundled: the
+      # staged sidecar tree (src-tauri/binaries/, incl. staged FFmpeg) and
+      # the raw PyInstaller --onedir output (dist/), if present.
+      - name: "Inside-out 3/5 — Sign INNER binaries (Azure Artifact Signing, staged sidecar tree)"
+        if: needs.check-secrets.outputs.has_azure_signing == 'true' && hashFiles('src-tauri/binaries/**/*.exe', 'src-tauri/binaries/**/*.dll') != ''
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\src-tauri\binaries
+          files-folder-filter: exe,dll
+          files-folder-recursive: true
+          file-digest: SHA256
+          timestamp-rfc3161: https://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: "Inside-out 3/5 — Sign INNER binaries (Azure Artifact Signing, PyInstaller dist tree)"
+        if: needs.check-secrets.outputs.has_azure_signing == 'true' && hashFiles('dist/**/*.exe', 'dist/**/*.dll') != ''
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: exe,dll
+          files-folder-recursive: true
+          file-digest: SHA256
+          timestamp-rfc3161: https://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: "Inside-out 3/5 — Sign INNER binaries (OV certificate via signtool)"
+        if: needs.check-secrets.outputs.has_azure_signing != 'true' && needs.check-secrets.outputs.has_windows_cert == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_THUMBPRINT: ${{ secrets.WINDOWS_CERT_THUMBPRINT }}
+          WINDOWS_CERT_BASE64_PFX: ${{ secrets.WINDOWS_CERT_BASE64_PFX }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $inner = @()
+          foreach ($root in @("src-tauri/binaries", "dist")) {
+            if (Test-Path $root) {
+              $inner += Get-ChildItem $root -Recurse -File | Where-Object { $_.Extension -in ".exe", ".dll" }
+            }
+          }
+          $inner = @($inner | Sort-Object FullName -Unique)
+          if ($inner.Count -eq 0) { throw "No inner binaries found to sign under src-tauri/binaries/ or dist/ — the sidecar staging step must run before signing." }
+          $signtool = (Get-Command "signtool.exe" -ErrorAction SilentlyContinue).Source
+          if (-not $signtool) {
+            $signtool = Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/signtool.exe" -ErrorAction SilentlyContinue |
+                        Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $signtool) { throw "signtool.exe not found on the runner." }
+          $pfxPath = $null
+          $certArgs = @()
+          if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_THUMBPRINT)) {
+            $certArgs = @("/sha1", $env:WINDOWS_CERT_THUMBPRINT)
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_BASE64_PFX)) {
+            $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERT_BASE64_PFX))
+            $certArgs = @("/f", $pfxPath, "/p", $env:WINDOWS_CERT_PASSWORD)
+          } else {
+            throw "Authenticode reported as configured, but neither a thumbprint nor a PFX secret is available."
+          }
+          try {
+            foreach ($file in $inner) {
+              Write-Host "Signing inner binary: $($file.FullName)"
+              & $signtool sign /fd SHA256 /tr "http://timestamp.digicert.com" /td SHA256 @certArgs $file.FullName
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($file.FullName)" }
+            }
+          } finally {
+            if ($pfxPath -and (Test-Path $pfxPath)) { Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue }
+          }
+          Write-Host "Signed $($inner.Count) inner binar(ies) (SHA-256 + RFC 3161 timestamp)."
+
+      - name: "Inside-out 3/5 — Verify INNER signatures before bundling"
+        if: needs.check-secrets.outputs.has_authenticode == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $inner = @()
+          foreach ($root in @("src-tauri/binaries", "dist")) {
+            if (Test-Path $root) {
+              $inner += Get-ChildItem $root -Recurse -File | Where-Object { $_.Extension -in ".exe", ".dll" }
+            }
+          }
+          $inner = @($inner | Sort-Object FullName -Unique)
+          if ($inner.Count -eq 0) { throw "No inner binaries found to verify under src-tauri/binaries/ or dist/." }
+          $signtool = (Get-Command "signtool.exe" -ErrorAction SilentlyContinue).Source
+          if (-not $signtool) {
+            $signtool = Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/signtool.exe" -ErrorAction SilentlyContinue |
+                        Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $signtool) { throw "signtool.exe not found on the runner." }
+          foreach ($file in $inner) {
+            & $signtool verify /pa /all $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool verify FAILED for inner binary $($file.FullName) — bundling an unverified binary is not allowed." }
+          }
+          Write-Host "All $($inner.Count) inner binar(ies) verified (/pa /all) before bundling."
+
+      - name: "Inside-out 3/5 — UNSIGNED inner binaries (no Authenticode secrets wired)"
+        if: needs.check-secrets.outputs.has_authenticode != 'true'
+        shell: pwsh
+        run: |
+          $banner = @(
+            "# WARNING — UNSIGNED INNER BINARIES",
+            "",
+            "No Authenticode signing secrets are configured (neither Azure Artifact Signing nor the OV certificate fallback).",
+            "The sidecar / FFmpeg binaries bundled by this build are UNSIGNED. The sign job will repeat this warning for the",
+            "outer artefacts. Artefacts from this run MUST NOT be published as a signed release."
+          ) -join "`n"
+          $banner | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          Write-Host "::warning title=UNSIGNED ARTEFACTS::Inner-binary signing skipped — no Authenticode secrets are configured. In a signed release EVERY inner PE file (sidecar, FFmpeg, helpers) is signed with SHA-256 + RFC 3161 timestamp BEFORE tauri build bundles them (Part 11.3)."
+
+      # --- Inside-out 4/5: tauri build ---------------------------------------
+      # Builds the shell + NSIS per-user installer (bundle.targets: nsis,
+      # installMode: currentUser, webviewInstallMode: embedBootstrapper —
+      # all per tauri.conf.json) FROM ALREADY-SIGNED inner files, and —
+      # when the updater key is wired — the Tauri updater artefacts (.sig).
+      # The updater private key reaches the build ONLY through this step's
+      # env (mapped from the secret name); it is never echoed.
+      # NOTE: the main app exe is Authenticode-signed by Tauri's bundler
+      # signing configuration during this step where configured in
+      # tauri.conf.json; the inner binaries were signed above, before
+      # bundling. tauri.conf.json's updater endpoints + pubkey are still
+      # placeholders — pointing them at the real update endpoint is a
+      # shell-team follow-up, tracked outside this workflow.
+      - name: "Inside-out 4/5 — Tauri build (NSIS per-user installer + updater artefacts)"
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            Write-Host "::warning::TAURI_SIGNING_PRIVATE_KEY is not configured — tauri build will produce the NSIS installer but no signed updater artefacts (.sig), so latest.json cannot be a valid updater manifest for this build."
+          }
+          $scripts = (Get-Content "package.json" -Raw | ConvertFrom-Json).scripts
+          if ($null -ne $scripts -and $null -ne $scripts.'tauri:build') {
+            npm run tauri:build
+          } else {
+            npx tauri build
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $bundle = Get-ChildItem "src-tauri/target/release/bundle" -Recurse -File -ErrorAction SilentlyContinue
+          if (-not $bundle) { throw "tauri build produced no bundle artefacts under src-tauri/target/release/bundle." }
+          $bundle | ForEach-Object { Write-Host "Bundle artefact: $($_.FullName)" }
+
+      - name: Upload bundle artefacts (for the sign job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-${{ steps.version.outputs.version }}
+          path: |
+            src-tauri/target/release/bundle/**
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Sign the OUTER artefacts + verification gate. The inner binaries were
+  # already signed inside the build job, before bundling (see the header
+  # structure decision); what remains is the NSIS installer — which for the
+  # NSIS target is also the Tauri updater artefact — plus verification of
+  # every signature. The updater .sig itself is a minisign signature made
+  # by `tauri build` from the TAURI_SIGNING_PRIVATE_KEY secret; this job
+  # never handles that key and verifies the .sig by presence + non-empty
+  # content (cryptographic verification happens in the app, against the
+  # pubkey embedded in the binary, at update time — Part 11.4).
+  # ---------------------------------------------------------------------------
+  sign:
+    name: Sign installer + updater artefacts, verify
+    needs: [build, check-secrets]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      signing_status: ${{ steps.check.outputs.signing_status }}
+    steps:
+      # FIRST step, per the release design: re-probe the signing secrets
+      # in this job and banner LOUDLY if they are absent. Values are never
+      # echoed; only presence booleans leave this step.
+      - name: Check signing secrets (unsigned = loud warning, signing skipped)
+        id: check
+        shell: pwsh
+        env:
+          AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_ARTIFACT_SIGNING_TENANT_ID: ${{ secrets.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
+          AZURE_ARTIFACT_SIGNING_CLIENT_ID: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
+          AZURE_ARTIFACT_SIGNING_CLIENT_SECRET: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_SECRET }}
+          WINDOWS_CERT_BASE64_PFX: ${{ secrets.WINDOWS_CERT_BASE64_PFX }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          WINDOWS_CERT_THUMBPRINT: ${{ secrets.WINDOWS_CERT_THUMBPRINT }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          # Partial configuration reports 'not configured' and surfaces as
+          # the loud UNSIGNED path below — failing loud early instead of
+          # inside the signing action. Azure requires ALL six secrets;
+          # the OV path requires PFX + password (a thumbprint alone
+          # cannot sign in CI).
+          $azure = -not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_ENDPOINT) `
+                   -and -not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME) `
+                   -and -not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME) `
+                   -and -not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_TENANT_ID) `
+                   -and -not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_CLIENT_ID) `
+                   -and -not [string]::IsNullOrWhiteSpace($env:AZURE_ARTIFACT_SIGNING_CLIENT_SECRET)
+          $cert  = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_BASE64_PFX) `
+                   -and -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_PASSWORD)
+          $tauri = -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)
+          $authenticode = $azure -or $cert
+          $status = if ($authenticode) { "signed" } else { "unsigned" }
+          "has_azure_signing=$($azure.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "has_windows_cert=$($cert.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "has_authenticode=$($authenticode.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "has_tauri_signing=$($tauri.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "signing_status=$status" >> $env:GITHUB_OUTPUT
+          if (-not $authenticode) {
+            $banner = @(
+              "# WARNING — UNSIGNED ARTEFACTS — DO NOT PUBLISH AS A SIGNED RELEASE",
+              "",
+              "No Authenticode signing secrets are configured: neither Azure Artifact Signing",
+              "(AZURE_ARTIFACT_SIGNING_*) nor the OV certificate fallback (WINDOWS_CERT_*).",
+              "All signing steps in this job are SKIPPED and the artefacts are forwarded UNSIGNED.",
+              "An unsigned build may be used for internal Ring 0 smoke testing only."
+            ) -join "`n"
+            $banner | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            Write-Host "::warning title=UNSIGNED ARTEFACTS::No Authenticode signing secrets are configured. Signing steps are SKIPPED; the installer and updater artefacts from this run are UNSIGNED and MUST NOT be published as a signed release."
+          } else {
+            Write-Host "Authenticode signing available (Azure=$azure, OV fallback=$cert). The installer will be signed and every signature verified in this job."
+          }
+          if (-not $tauri) {
+            Write-Host "::warning::TAURI_SIGNING_PRIVATE_KEY is not configured — updater .sig artefacts cannot be present for this release; the verification step will treat a missing .sig accordingly."
+          }
+
+      - name: Download bundle artefacts from the build job
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle-${{ needs.build.outputs.version }}
+          path: artefacts
+
+      - name: "Inside-out 5/5 — Sign installer + updater artefacts (Azure Artifact Signing)"
+        if: steps.check.outputs.has_azure_signing == 'true'
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\artefacts
+          files-folder-filter: exe
+          files-folder-recursive: true
+          file-digest: SHA256
+          timestamp-rfc3161: https://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: "Inside-out 5/5 — Sign installer + updater artefacts (OV certificate via signtool)"
+        if: steps.check.outputs.has_azure_signing != 'true' && steps.check.outputs.has_windows_cert == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_THUMBPRINT: ${{ secrets.WINDOWS_CERT_THUMBPRINT }}
+          WINDOWS_CERT_BASE64_PFX: ${{ secrets.WINDOWS_CERT_BASE64_PFX }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installers = @(Get-ChildItem "artefacts" -Recurse -File -Filter "*.exe" -ErrorAction SilentlyContinue)
+          if ($installers.Count -eq 0) { throw "No installer .exe found under artefacts/ — nothing to sign." }
+          $signtool = (Get-Command "signtool.exe" -ErrorAction SilentlyContinue).Source
+          if (-not $signtool) {
+            $signtool = Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/signtool.exe" -ErrorAction SilentlyContinue |
+                        Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $signtool) { throw "signtool.exe not found on the runner." }
+          $pfxPath = $null
+          $certArgs = @()
+          if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_THUMBPRINT)) {
+            $certArgs = @("/sha1", $env:WINDOWS_CERT_THUMBPRINT)
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_BASE64_PFX)) {
+            $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERT_BASE64_PFX))
+            $certArgs = @("/f", $pfxPath, "/p", $env:WINDOWS_CERT_PASSWORD)
+          } else {
+            throw "Authenticode reported as configured, but neither a thumbprint nor a PFX secret is available."
+          }
+          try {
+            foreach ($file in $installers) {
+              Write-Host "Signing installer artefact: $($file.FullName)"
+              & $signtool sign /fd SHA256 /tr "http://timestamp.digicert.com" /td SHA256 @certArgs $file.FullName
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($file.FullName)" }
+            }
+          } finally {
+            if ($pfxPath -and (Test-Path $pfxPath)) { Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue }
+          }
+          Write-Host "Installer artefact(s) signed (SHA-256 + RFC 3161 timestamp)."
+
+      - name: "Verify every signature (signtool verify /pa /all + updater .sig presence)"
+        if: steps.check.outputs.has_authenticode == 'true'
+        shell: pwsh
+        env:
+          HAS_TAURI_SIGNING: ${{ needs.check-secrets.outputs.has_tauri_signing }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $signtool = (Get-Command "signtool.exe" -ErrorAction SilentlyContinue).Source
+          if (-not $signtool) {
+            $signtool = Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/signtool.exe" -ErrorAction SilentlyContinue |
+                        Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $signtool) { throw "signtool.exe not found on the runner." }
+          $exes = @(Get-ChildItem "artefacts" -Recurse -File -Filter "*.exe" -ErrorAction SilentlyContinue)
+          if ($exes.Count -eq 0) { throw "No .exe artefacts found under artefacts/ to verify." }
+          foreach ($file in $exes) {
+            & $signtool verify /pa /all $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool verify FAILED for $($file.FullName) — the release stops here; an unverified artefact is never published." }
+          }
+          Write-Host "Authenticode verification passed (/pa /all) for $($exes.Count) artefact(s)."
+          # Updater artefacts: the .sig next to the installer is a minisign
+          # signature produced by tauri build from TAURI_SIGNING_PRIVATE_KEY
+          # (env-only, in the build job). CI verifies presence + non-empty
+          # content; the Tauri updater itself cryptographically verifies
+          # the signature against the pubkey embedded in the app.
+          $sigs = @(Get-ChildItem "artefacts" -Recurse -File -Filter "*.sig" -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 0 })
+          if ($env:HAS_TAURI_SIGNING -eq "true") {
+            if ($sigs.Count -eq 0) { throw "TAURI_SIGNING_PRIVATE_KEY is configured but no non-empty updater .sig artefact was produced — refusing to ship an updater manifest without its signature." }
+            Write-Host "Updater .sig artefact(s) present: $($sigs.Count)."
+          } else {
+            Write-Host "::warning::No Tauri updater signing key is configured, so no updater .sig was expected or checked for this release."
+          }
+
+      - name: Write signing-status marker + upload final artefacts
+        shell: pwsh
+        env:
+          SIGNING_STATUS: ${{ steps.check.outputs.signing_status }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:SIGNING_STATUS -eq "signed") {
+            "authenticode: signed and verified in the sign job (signtool verify /pa /all). See the sign job log for per-artefact results." | Set-Content "SIGNING-STATUS.txt" -Encoding UTF8
+          } else {
+            "UNSIGNED — the artefacts in this bundle were NOT Authenticode-signed (no signing secrets were configured) and MUST NOT be published as a signed release." | Set-Content "SIGNING-STATUS.txt" -Encoding UTF8
+          }
+          Write-Host "Signing status for this bundle: $env:SIGNING_STATUS"
+
+      - name: Upload final artefacts (for the manifest+release job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-final-${{ needs.build.outputs.version }}
+          path: |
+            artefacts/**
+            SIGNING-STATUS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Manifests + DRAFT GitHub Release. This is the ONLY job granted
+  # contents: write, because it is the only job that creates a release.
+  # The release it creates is ALWAYS a draft — a human reviews the
+  # artefacts, the VirusTotal/Defender scan results and the rollout ring,
+  # then publishes per docs/RELEASE.md. Manifests go live last, and ring
+  # promotion beyond Ring 0/1 is a manual manifest/server operation.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Manifests + draft GitHub Release
+    needs: [build, sign, check-secrets]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (for CHANGELOG + FFmpeg pin metadata)
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Download final artefacts from the sign job
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle-final-${{ needs.build.outputs.version }}
+          path: final
+
+      - name: Generate latest.json + backend.json + SHA256SUMS.txt + release notes
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          SIGNING_STATUS: ${{ needs.sign.outputs.signing_status }}
+          HAS_TAURI_SIGNING: ${{ needs.check-secrets.outputs.has_tauri_signing }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "release-manifests" | Out-Null
+          $version = $env:RELEASE_VERSION
+          $tag = "v$version"
+          $repo = $env:GITHUB_REPOSITORY
+
+          $installer = Get-ChildItem "final" -Recurse -File -Filter "*setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $installer) { $installer = Get-ChildItem "final" -Recurse -File -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if ($null -eq $installer) { throw "No installer artefact found in the signed bundle — cannot emit an updater manifest." }
+
+          # -- Notes: the CHANGELOG section for this version, if the repo
+          # carries one; otherwise a pointer at the GitHub Release notes.
+          $notes = $null
+          if (Test-Path "source/CHANGELOG.md") {
+            $capture = $false
+            $buf = @()
+            foreach ($line in (Get-Content "source/CHANGELOG.md")) {
+              if ($line -match '^##\s+') {
+                if ($capture) { break }
+                if ($line -match [regex]::Escape($version)) { $capture = $true; continue }
+              } elseif ($capture) { $buf += $line }
+            }
+            if ($buf.Count -gt 0) { $notes = ($buf -join "`n").Trim() }
+          }
+          if ([string]::IsNullOrWhiteSpace($notes)) { $notes = "See the GitHub Release notes for $tag." }
+
+          # -- latest.json: Tauri updater manifest (Part 11.4). The
+          # signature is the contents of the .sig file tauri build produced
+          # next to the installer; the updater refuses any artefact whose
+          # minisign signature does not match the pubkey embedded in the
+          # app, regardless of Authenticode.
+          $signature = ""
+          $sigFile = "$($installer.FullName).sig"
+          if (Test-Path $sigFile) { $signature = (Get-Content $sigFile -Raw).Trim() }
+          if ([string]::IsNullOrWhiteSpace($signature)) {
+            if ($env:HAS_TAURI_SIGNING -eq "true") {
+              throw "No updater .sig found next to the installer although TAURI_SIGNING_PRIVATE_KEY is configured — refusing to emit an updater manifest without its signature."
+            }
+            Write-Host "::warning::No updater .sig found — latest.json is emitted with an EMPTY signature. This manifest is NOT a valid updater manifest and must not be served to installed clients until a build with TAURI_SIGNING_PRIVATE_KEY wired produces signed updater artefacts."
+          }
+          $downloadUrl = "https://github.com/$repo/releases/download/$tag/$($installer.Name)"
+          $latest = [ordered]@{
+            version   = $version
+            notes     = $notes
+            pub_date  = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = $signature
+                url       = $downloadUrl
+              }
+            }
+          }
+          $latest | ConvertTo-Json -Depth 6 | Set-Content "release-manifests/latest.json" -Encoding UTF8
+          Write-Host "Wrote release-manifests/latest.json"
+
+          # -- backend.json: Python backend package manifest (Part 11.5).
+          # A minisign signature made with the SEPARATE backend keypair
+          # (never the Tauri updater key) belongs here once a backend
+          # package exists. NOTE (Round 6 closure, D5): no step in this
+          # workflow builds a backend-<version>.zip asset, so the
+          # manifest deliberately carries NO url/sha256 entry — it must
+          # only advertise artefacts that actually exist. Re-add those
+          # fields, computed from the built asset, in the same change
+          # that adds a step which builds the backend package.
+          $ffmpegVersion = ""
+          if (Test-Path "source/packaging/ffmpeg-pin.json") {
+            $pin = Get-Content "source/packaging/ffmpeg-pin.json" -Raw | ConvertFrom-Json
+            $ffmpegVersion = $pin.version
+            if ([string]::IsNullOrWhiteSpace($ffmpegVersion)) { $ffmpegVersion = $pin.ffmpegVersion }
+            if ($null -eq $ffmpegVersion) { $ffmpegVersion = "" }
+          }
+          $backend = [ordered]@{
+            backendVersion  = $version
+            signature       = ""   # minisign signature with the BACKEND keypair (separate from the Tauri updater key) — wire in the release environment.
+            minShellVersion = $version
+            ffmpegVersion   = "$ffmpegVersion"
+            notes           = "Backend manifest for $tag. This workflow publishes no backend package asset (see the D5 note above), so no download URL or SHA-256 is advertised here. Once a backend package is built, verify its SHA-256, then the minisign signature, before swapping (Part 11.5 install algorithm)."
+          }
+          $backend | ConvertTo-Json -Depth 4 | Set-Content "release-manifests/backend.json" -Encoding UTF8
+          Write-Host "Wrote release-manifests/backend.json"
+
+          # -- HTTPS gate: EVERY URL in either manifest must be https.
+          foreach ($manifestPath in @("release-manifests/latest.json", "release-manifests/backend.json")) {
+            $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+            $urls = @()
+            if ($manifest.platforms) { $urls += $manifest.platforms.PSObject.Properties.Value.url }
+            if ($manifest.url) { $urls += $manifest.url }
+            foreach ($u in $urls) {
+              if ($u -notlike "https://*") { throw "Manifest URL is not https ($u in $manifestPath) — refusing to emit the manifest." }
+            }
+          }
+          Write-Host "All manifest URLs verified https."
+
+          # -- SHA-256 checksums for ALL release artefacts (Part 11.3 #5).
+          $checksumTargets = @()
+          $checksumTargets += Get-ChildItem "final" -Recurse -File | Where-Object { $_.Name -ne "SIGNING-STATUS.txt" }
+          $checksumTargets += Get-Item "release-manifests/latest.json"
+          $checksumTargets += Get-Item "release-manifests/backend.json"
+          $checksumTargets | Sort-Object FullName -Unique | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content "release-manifests/SHA256SUMS.txt" -Encoding UTF8
+          Write-Host "Wrote release-manifests/SHA256SUMS.txt"
+
+          # -- Release notes handed to the draft GitHub Release.
+          $noteLines = @("# YouTube Agent $tag", "")
+          if ($env:SIGNING_STATUS -ne "signed") {
+            $noteLines += @("> **WARNING — UNSIGNED BUILD.** No Authenticode signing secrets were configured for this run.",
+                            "> These artefacts are UNSIGNED and must not be published as a signed release.", "")
+          }
+          $noteLines += @($notes, "", "Artefacts: NSIS per-user installer (+ Tauri updater .sig), latest.json, backend.json, SHA256SUMS.txt.")
+          $noteLines += "Rollout: this release starts at Ring 0/1 only; promotion is a manual, gated operation (docs/RELEASE.md)."
+          ($noteLines -join "`n") | Set-Content "release-manifests/release-notes.md" -Encoding UTF8
+          Write-Host "Wrote release-manifests/release-notes.md (signing status: $env:SIGNING_STATUS)"
+
+      - name: Upload release artefacts + manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-agent-${{ needs.build.outputs.version }}
+          path: |
+            final/**
+            release-manifests/**
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create DRAFT GitHub Release (a human publishes it)
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "v$($env:RELEASE_VERSION)"
+          $assets = @()
+          $installer = Get-ChildItem "final" -Recurse -File -Filter "*setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $installer) { $installer = Get-ChildItem "final" -Recurse -File -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if ($null -ne $installer) {
+            $assets += $installer.FullName
+            if (Test-Path "$($installer.FullName).sig") { $assets += "$($installer.FullName).sig" }
+          }
+          $assets += Get-ChildItem "release-manifests" -File | Where-Object { $_.Name -in @("latest.json", "backend.json", "SHA256SUMS.txt") } | ForEach-Object { $_.FullName }
+          if ($assets.Count -eq 0) { throw "No artefacts to attach to the draft release." }
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "A release for $tag already exists — uploading artefacts to it (clobber) and keeping it a DRAFT."
+            gh release upload $tag @assets --clobber
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            gh release edit $tag --draft --notes-file "release-manifests/release-notes.md"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            gh release create $tag @assets `
+              --draft `
+              --target $env:GITHUB_SHA `
+              --title "YouTube Agent $tag" `
+              --notes-file "release-manifests/release-notes.md"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Write-Host "DRAFT GitHub Release $tag is ready. It stays DRAFT until a human publishes it per docs/RELEASE.md."
+
+      - name: Draft GitHub Release — SKIPPED (manual run without publish)
+        if: "!startsWith(github.ref, 'refs/tags/v') && !inputs.publish"
+        shell: pwsh
+        run: |
+          Write-Host "::notice::Manual run without the publish option — no GitHub Release was created. Artefacts + manifests are available from this run's uploaded artefacts."
+
+      # --- Staged rollout note (Part 11.6 / docs/RELEASE.md section 2) --------
+      - name: Staged rollout — Ring 0 / Ring 1 note (manual promotion gate)
+        if: always()
+        shell: pwsh
+        env:
+          RING: ${{ inputs.ring }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          SIGNING_STATUS: ${{ needs.sign.outputs.signing_status }}
+        run: |
+          $ring = $env:RING
+          if ([string]::IsNullOrWhiteSpace($ring)) { $ring = "Ring 0" }
+          $summary = @(
+            "# Staged rollout — YouTube Agent v$($env:RELEASE_VERSION)",
+            "",
+            "- Initial ring: **$ring** (this workflow produces Ring 0/1 artefacts only)",
+            "- Signing status: **$($env:SIGNING_STATUS)**",
+            "- The GitHub Release is a **DRAFT**; a human publishes it per docs/RELEASE.md.",
+            "",
+            "Ring 0 — Internal: dev machines + clean Win10/Win11 VMs. Soak >= 24h; advance gate: install/upgrade/uninstall smoke suite green.",
+            "Ring 1 — Beta: opt-in users + 5% deterministic slice. Soak 48h; ALL gates must hold: update success >= 98%, crash-free sessions >= 99%, zero attributable sidecar-health failures.",
+            "Ring 2 (25% -> 50%) and Ring 3 (100%) are promoted MANUALLY by changing which version the update manifest serves — a server configuration change, NOT a new build. Halt = freeze manifest promotion; rollback = repoint backend.json (fast path) or a forward-fix repackage under a higher version (shell, slow path). Halt criteria must be written into the release ticket BEFORE promotion.",
+            "Escrow check (Part 11.8 #5): Tauri updater private key, backend minisign private key and Authenticode/Azure signing access must each be recoverable by a SECOND team member before this release is promoted beyond Ring 0."
+          ) -join "`n"
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          Write-Host $summary

@@ -1,0 +1,55 @@
+[package]
+name = "youtube-agent"
+version = "0.1.0"
+description = "YouTube Agent — fully automatic faceless YouTube video production (Windows desktop app)"
+edition = "2021"
+
+# Tauri 2 library setup: the shell logic lives in the library crate so the
+# thin binary in src/main.rs (and any future mobile/test entry points) can
+# all call `youtube_agent_lib::run()`.
+[lib]
+name = "youtube_agent_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+# Thin supervisor shell only (roadmap Part 6 / section 06): window + tray
+# residency, single-instance, updater, and sidecar lifecycle. All product
+# logic lives in the Python sidecar — never in Rust.
+tauri = { version = "2", features = ["tray-icon"] }
+# Roadmap §06/§36: exactly one running instance (never two sidecars), and
+# self-update without admin rights via the Tauri updater.
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+# Required for the updater's post-install relaunch (`process:allow-restart`).
+tauri-plugin-process = "2"
+# Sidecar spawn/supervision (roadmap §4.6): the shell spawns the Python
+# backend as a Tauri `externalBin` named `agent-backend` and owns its
+# lifecycle (env-only launch contract, stdout events, stdin, kill).
+tauri-plugin-shell = "2"
+# Start-on-login toggle (features::autostart_* commands).
+tauri-plugin-autostart = "2"
+# Native file/folder pickers (features::pick_files / pick_folder commands).
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Per-launch sidecar token + boot_id generation (roadmap §4.5/§4.6, see
+# src/sidecar.rs). `rand::thread_rng` is backed by the OS CSPRNG. The
+# token's base64url encoding is hand-rolled in sidecar.rs — no base64
+# crate is pulled in for one encoder.
+rand = "0.8"
+
+# Windows Job Object supervision (roadmap §4.6): the whole sidecar worker
+# tree (backend + its FFmpeg children) is assigned to a job object with
+# JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE owned by this shell process, so no
+# descendant can outlive the shell. Also used for the PID-reuse-safe
+# orphan sweep (GetProcessTimes / QueryFullProcessImageNameW).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_Debug",
+] }

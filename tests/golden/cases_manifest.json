@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "status": "seed",
+  "note": "Seed scaffolding only. Section 17 requires >=30 cases/agent at MVP and >=50 at v1, spanning every built-in niche, >=5 Other/custom niches, Urdu, English and code-switched Roman Urdu. Datasets are FROZEN per release; new cases come from production failures and user corrections, and cases are never edited to make a failing prompt pass.",
+  "mvp_target_per_agent": 30,
+  "v1_target_per_agent": 50,
+  "agents": {
+    "fact_check": {
+      "file": "datasets/fact_check.jsonl",
+      "seed_cases": 6,
+      "mvp_target": 30,
+      "v1_target": 50,
+      "gap_to_mvp": 24
+    },
+    "hook_retention": {
+      "file": "datasets/hook_retention.jsonl",
+      "seed_cases": 6,
+      "mvp_target": 30,
+      "v1_target": 50,
+      "gap_to_mvp": 24
+    },
+    "topic_scoring": {
+      "file": "datasets/topic_scoring.jsonl",
+      "seed_cases": 6,
+      "mvp_target": 30,
+      "v1_target": 50,
+      "gap_to_mvp": 24
+    },
+    "similarity_gate": {
+      "file": "datasets/similarity_gate.jsonl",
+      "seed_cases": 5,
+      "mvp_target": 30,
+      "v1_target": 50,
+      "gap_to_mvp": 25
+    },
+    "qc_policy": {
+      "file": "datasets/qc_policy.jsonl",
+      "seed_cases": 6,
+      "mvp_target": 30,
+      "v1_target": 50,
+      "gap_to_mvp": 24
+    }
+  },
+  "totals": {
+    "seed_cases": 29,
+    "agents_seeded": 5,
+    "other_niche_cases": 4,
+    "language_coverage": {
+      "en": 20,
+      "ur": 4,
+      "roman-ur": 5
+    }
+  },
+  "scoring_summary": {
+    "tiers": [
+      "deterministic assertions (no LLM cost)",
+      "reference-based metrics",
+      "LLM-as-judge (rubric 1-5)"
+    ],
+    "judge_calibration": "Judge model must differ from and be stronger than the agent default; ship only while judge-human Cohen's kappa >= 0.7, calibrated quarterly on a 100-output human-rated sample.",
+    "golden_video_tolerances_reference": {
+      "ssim_mean_min": 0.98,
+      "loudness_lufs": "-14 +/- 1",
+      "true_peak_max_dbtp": -1,
+      "subtitle_cue_offset_max_ms": 200
+    }
+  }
+}
