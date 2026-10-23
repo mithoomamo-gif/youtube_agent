@@ -20,6 +20,10 @@ dependencies = [
     "langgraph-checkpoint-sqlite",
     "PyYAML>=6",
     "Pillow>=10",
+    # numpy is imported directly by app.style_analysis (visual_classify,
+    # dressing); it was previously present only transitively via the
+    # faster-whisper stack, which broke clean installs (CI run #1).
+    "numpy>=1.26",
     "edge-tts>=7",
 ]
 

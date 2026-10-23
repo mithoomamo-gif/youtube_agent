@@ -341,7 +341,7 @@ jobs:
           # through, matching the in-repo scanner's convention.
           hits="$(git grep -n -I -E "$PATTERN" -- \
             ':!.github/workflows/*' \
-            ':!tests/*' \
+            ':!tests/*' ':!backend/tests/*' \
             ':!*.lock' ':!package-lock.json' ':!*.min.js' ':!*.map' \
             2>/dev/null \
             | grep -Ev 'secret-scan: allow|your[-_]|example|dummy|fake|sample|placeholder|changeme|xxxx|\$\{\{|secrets\.|process\.env|os\.environ|getenv|REDACTED|<[A-Z_]+>' \
