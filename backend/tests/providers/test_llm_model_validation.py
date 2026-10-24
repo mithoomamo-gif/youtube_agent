@@ -29,8 +29,8 @@ from app.providers.llm import (
 from app.providers.llm.pacing import PacingConfig, ProviderPacing
 from app.providers.budget.catalog import PriceCatalog
 
-BACKEND = __file__.rsplit("/tests/", 1)[0]
-REGISTRY_PATH = f"{BACKEND}/config/models.yaml"
+BACKEND = Path(__file__).resolve().parents[2]
+REGISTRY_PATH = BACKEND / "config" / "models.yaml"
 
 FAST = ProviderPacing(rpm=100_000.0, burst=10_000, min_interval_s=0.0)
 

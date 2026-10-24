@@ -98,6 +98,10 @@ def test_linux_default_is_historical_home_dir() -> None:
     assert resolve_data_dir({}, platform="darwin", home=HOME) == HOME / ".youtube-agent"
 
 
+@pytest.mark.skipif(
+    is_windows_platform(),
+    reason="Linux default via load_settings only applies on non-Windows platforms",
+)
 def test_linux_default_via_load_settings_unchanged() -> None:
     # Mirrors the pre-existing expectation in test_config.py.
     settings = load_settings(env={"YTA_TOKEN": "tok-12345678"})
@@ -112,6 +116,10 @@ def test_linux_legacy_appdata_honoured_for_backcompat() -> None:
     )
 
 
+@pytest.mark.skipif(
+    is_windows_platform(),
+    reason="Asserts the running platform is not Windows; only valid on non-Windows hosts",
+)
 def test_running_platform_is_not_windows_on_this_vm() -> None:
     assert is_windows_platform() is False
     assert resolve_data_dir({}, home=HOME) == HOME / ".youtube-agent"
@@ -172,7 +180,7 @@ def test_comment_intel_default_uses_canonical_root(
     monkeypatch.setenv("YTA_DATA_DIR", "/canonical/data")
     assert default_comment_intel_dir() == Path("/canonical/data/comment_intel")
     monkeypatch.delenv("YTA_DATA_DIR")
-    assert default_comment_intel_dir() == Path.home() / ".youtube-agent" / "comment_intel"
+    assert default_comment_intel_dir() == resolve_data_dir() / "comment_intel"
 
 
 def test_stylelab_and_retention_fallbacks_use_canonical_root(

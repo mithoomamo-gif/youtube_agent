@@ -466,6 +466,27 @@ def park_project_failed(
 # Crash / restart recovery
 # ---------------------------------------------------------------------------
 
+def _effective_error_code(job: dict) -> Optional[str]:
+    """Effective error code for a raw ``jobs`` row.
+
+    The physical schema carries an ``error_code`` column but no
+    ``error_message`` column, so the queue's split-field path never
+    fires (``queue._Schema.has_error_split`` requires *both* columns)
+    and ``error_code`` stays NULL on queue-written rows: the code lives
+    only in the single ``error`` column as a ``"code: message"``
+    string.  Normalise the code from that prefix; a populated
+    ``error_code`` (e.g. rows written by :func:`park_project_failed`'s
+    downstream cleanup, which sets both fields) wins when present.
+    """
+    code = job.get("error_code")
+    if code:
+        return str(code)
+    raw = job.get("error")
+    if isinstance(raw, str) and raw and ": " in raw:
+        return raw.split(": ", 1)[0] or None
+    return None
+
+
 def recover_and_park(conn_factory, queue=None, events: Any = None) -> dict:
     """Startup recovery: sweep expired leases, then park orphan failures.
 
@@ -511,8 +532,17 @@ def recover_and_park(conn_factory, queue=None, events: Any = None) -> dict:
             existing = by_project.get(pid)
             if existing is None:
                 by_project[pid] = job
-            elif (existing.get("error_code") == DOWNSTREAM_ERROR_CODE
-                  and job.get("error_code") != DOWNSTREAM_ERROR_CODE):
+            elif (_effective_error_code(existing) == DOWNSTREAM_ERROR_CODE
+                  and _effective_error_code(job) != DOWNSTREAM_ERROR_CODE):
+                # Prefer the originating failure over a downstream
+                # ``dependency_failed`` marker regardless of row order:
+                # jobs dead-lettered by one sweep share the same
+                # ``updated_at`` (and often ``created_at``), so the
+                # ORDER BY above cannot be trusted to surface the
+                # originator first.  The comparison must use the
+                # *effective* code — raw rows carry the code only in
+                # the ``error`` column (see _effective_error_code), so
+                # comparing ``error_code`` directly never fires.
                 by_project[pid] = job
     except Exception:
         by_project = {}

@@ -297,7 +297,9 @@ def test_token_manager_disconnect_has_a_route_caller():
         text = path.read_text(encoding="utf-8", errors="ignore")
         for lineno, line in enumerate(text.splitlines(), start=1):
             if ".disconnect(" in line and "def disconnect" not in line:
-                callers.append(f"{path.relative_to(REPO_ROOT)}:{lineno}")
+                callers.append(
+                    f"{path.relative_to(REPO_ROOT).as_posix()}:{lineno}"
+                )
     assert any(
         c.startswith("backend/app/routers/channels.py") for c in callers
     ), f"channels router no longer calls disconnect(): {callers}"

@@ -298,6 +298,12 @@ jobs:
           python -c "import pytest" 2>$null
           if ($LASTEXITCODE -ne 0) { pip install pytest; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
 
+      - name: Install FFmpeg (the suites shell out to ffmpeg / ffprobe)
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Backend + root test suites (Windows skip list applied)
         shell: pwsh
         run: |

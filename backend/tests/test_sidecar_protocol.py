@@ -519,9 +519,30 @@ def _http_get(port: int, path: str, token: str | None = None):
         return exc.code, exc.read().decode()
 
 
+def _http_post(port: int, path: str, token: str | None = None):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}", data=b"", method="POST"
+    )
+    if token is not None:
+        req.add_header("X-Local-Token", token)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.read().decode()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode()
+
+
 def test_subprocess_end_to_end_protocol_and_clean_exit(tmp_path):
     port = _free_port()
     env = _subprocess_env(tmp_path, YTA_PORT=str(port))
+    popen_kwargs: dict = {}
+    if sys.platform == "win32":
+        # A dedicated process group is what makes the child reachable
+        # by CTRL_BREAK_EVENT (SIGBREAK) below — the catchable Windows
+        # shutdown signal. Without it the only signal Popen can deliver
+        # on Windows is TerminateProcess (SIGTERM), which is uncatchable
+        # and exits 1, not the clean 0 this test pins.
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     proc = subprocess.Popen(
         [sys.executable, "-m", "app.main"],
         cwd=str(BACKEND_DIR),
@@ -529,6 +550,7 @@ def test_subprocess_end_to_end_protocol_and_clean_exit(tmp_path):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        **popen_kwargs,
     )
     listening = None
     try:
@@ -562,11 +584,35 @@ def test_subprocess_end_to_end_protocol_and_clean_exit(tmp_path):
         assert json.loads(body)["boot_id"] == BOOT_ID
     finally:
         if proc.poll() is None:
-            proc.send_signal(signal.SIGTERM)
+            if sys.platform == "win32":
+                # Windows shutdown, in the shell's own order
+                # (src-tauri sidecar graceful_stop):
+                # 1. POST /api/v1/system/shutdown (app/routers/system.py)
+                #    — confirmed to exist; it records the drain request
+                #    (202, app.state.shutdown_requested) but does NOT
+                #    itself exit the process, so it cannot be the only
+                #    step here.
+                try:
+                    _http_post(port, "/api/v1/system/shutdown", token=TOKEN)
+                except Exception:
+                    pass  # the signal below is the actual exit path
+                # 2. The catchable clean-exit signal the app supports on
+                #    Windows: CTRL_BREAK_EVENT raises SIGBREAK, which
+                #    uvicorn handles on win32 (graceful drain) and then
+                #    re-raises into the handler app.main pre-registered
+                #    (_install_clean_shutdown_signals), exiting 0.
+                #    SIGTERM on Windows is TerminateProcess — uncatchable,
+                #    exit 1 — so it must not be used here.
+                proc.send_signal(
+                    getattr(signal, "CTRL_BREAK_EVENT", signal.SIGBREAK)
+                )
+            else:
+                proc.send_signal(signal.SIGTERM)
         try:
             returncode = proc.wait(timeout=20)
         except subprocess.TimeoutExpired:
             proc.kill()
             returncode = proc.wait()
-    # Clean shutdown (SIGTERM -> graceful uvicorn stop) exits 0.
+    # Clean shutdown (SIGTERM on POSIX / HTTP drain + SIGBREAK on
+    # Windows -> graceful uvicorn stop) exits 0 on every platform.
     assert returncode == 0

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -22,8 +23,8 @@ from app.providers.llm import (
 )
 from app.providers.llm.ledger import LLMCallEntry, PriceSnapshot
 
-BACKEND = __file__.rsplit("/tests/", 1)[0]
-REGISTRY_PATH = f"{BACKEND}/config/models.yaml"
+BACKEND = Path(__file__).resolve().parents[2]
+REGISTRY_PATH = BACKEND / "config" / "models.yaml"
 
 
 class FakeSecrets:

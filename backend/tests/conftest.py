@@ -69,9 +69,12 @@ def app(settings):
         init_db = getattr(db_module, "init_db", None)
         if callable(init_db):
             try:
-                init_db(settings.db_path)
+                _init_conn = init_db(settings.db_path)
             except TypeError:
-                init_db()
+                _init_conn = init_db()
+            _close = getattr(_init_conn, "close", None)
+            if callable(_close):
+                _close()
     except Exception as exc:  # pragma: no cover - parallel-build tolerance
         print(f"conftest: app.db.init_db unavailable/skipped: {exc!r}")
 

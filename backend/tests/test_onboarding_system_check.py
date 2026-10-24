@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import time
 from types import SimpleNamespace
 
@@ -305,15 +306,25 @@ def test_system_check_endpoint_shape_and_honesty(client):
     ids = [c["id"] for c in body["checks"]]
     assert ids == ["webview2", "ffmpeg", "disk", "sidecar"]
     by_id = {c["id"]: c for c in body["checks"]}
-    # This test machine is Linux: WebView2 must be unverified, not pass.
-    assert by_id["webview2"]["status"] == "unverified"
+    # WebView2 is Windows-only: off Windows the honest result is
+    # "unverified" (never pass, never fail); on win32 the app performs
+    # the real registry/filesystem lookup and a machine with the
+    # runtime installed (e.g. the Windows CI runner) reports "pass".
+    if sys.platform.startswith("win"):
+        assert by_id["webview2"]["status"] == "pass"
+    else:
+        assert by_id["webview2"]["status"] == "unverified"
     # Disk reports a real number.
     assert by_id["disk"]["measured"]["free_bytes"] > 0
     assert by_id["disk"]["status"] in ("pass", "warn")
     # The sidecar really answered its own health endpoints.
     assert by_id["sidecar"]["status"] == "pass"
-    # Credential store selection is reported, honestly not-Windows here.
-    assert body["credential_store"]["windows_credential_manager"] is False
+    # Credential store selection is reported honestly: Windows
+    # Credential Manager is pinned only on win32 (the first-failure
+    # webview2 assert above previously masked this line on Windows).
+    assert body["credential_store"]["windows_credential_manager"] is (
+        sys.platform.startswith("win")
+    )
     assert body["overall"] in ("pass_with_unverified", "warn", "pass")
 
 

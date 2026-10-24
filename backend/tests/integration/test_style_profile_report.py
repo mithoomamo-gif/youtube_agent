@@ -215,7 +215,7 @@ def test_no_profile_run_has_no_style_section(monkeypatch, stage_fakes, tmp_path)
 def test_append_style_section_without_profile_is_byte_identical(tmp_path):
     report_path = tmp_path / "report.md"
     original = "# Production Report\n\n- Gate A passed: True\n"
-    report_path.write_text(original, encoding="utf-8")
+    report_path.write_bytes(original.encode("utf-8"))
     produce._append_style_section(report_path, {"style_profile": None})
     produce._append_style_section(report_path, {})
     assert report_path.read_bytes() == original.encode("utf-8")

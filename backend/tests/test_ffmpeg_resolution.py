@@ -26,6 +26,11 @@ def _touch_exe(path: Path) -> Path:
     return path
 
 
+def _bin_name(kind: str) -> str:
+    """Platform-correct binary leaf name (``ffmpeg.exe`` on Windows)."""
+    return f"{kind}.exe" if sys.platform.startswith("win") else kind
+
+
 def _no_which(_name: str):
     return None
 
@@ -36,8 +41,8 @@ def _no_which(_name: str):
 
 
 def test_env_override_beats_bundled_and_path(tmp_path: Path) -> None:
-    env_bin = _touch_exe(tmp_path / "custom" / "ffmpeg")
-    _touch_exe(tmp_path / "anchor" / "runtime" / "ffmpeg")
+    env_bin = _touch_exe(tmp_path / "custom" / _bin_name("ffmpeg"))
+    _touch_exe(tmp_path / "anchor" / "runtime" / _bin_name("ffmpeg"))
     resolved = fr.resolve_ffmpeg(
         env={fr.FFMPEG_ENV_VAR: str(env_bin)},
         anchor=tmp_path / "anchor",
@@ -47,7 +52,7 @@ def test_env_override_beats_bundled_and_path(tmp_path: Path) -> None:
 
 
 def test_bundled_beats_path(tmp_path: Path) -> None:
-    bundled = _touch_exe(tmp_path / "anchor" / "runtime" / "ffmpeg")
+    bundled = _touch_exe(tmp_path / "anchor" / "runtime" / _bin_name("ffmpeg"))
     resolved = fr.resolve_ffmpeg(
         env={}, anchor=tmp_path / "anchor", which=lambda name: "/system/bin/ffmpeg"
     )
@@ -55,13 +60,13 @@ def test_bundled_beats_path(tmp_path: Path) -> None:
 
 
 def test_bundled_flat_and_parent_runtime_layouts(tmp_path: Path) -> None:
-    flat = _touch_exe(tmp_path / "a" / "ffprobe")
+    flat = _touch_exe(tmp_path / "a" / _bin_name("ffprobe"))
     assert (
         fr.resolve_ffprobe(env={}, anchor=tmp_path / "a", which=_no_which) == flat
     )
     # <anchor>/../../runtime — versioned backend-release layout: sidecar in
     # releases/<ver>/, shared runtime/ at the install root.
-    root_runtime = _touch_exe(tmp_path / "runtime" / "ffprobe")
+    root_runtime = _touch_exe(tmp_path / "runtime" / _bin_name("ffprobe"))
     nested_anchor = tmp_path / "releases" / "1.0"
     nested_anchor.mkdir(parents=True)
     assert (
@@ -69,7 +74,7 @@ def test_bundled_flat_and_parent_runtime_layouts(tmp_path: Path) -> None:
         == root_runtime
     )
     # <anchor>/../runtime also resolves (one level up).
-    parent_runtime = _touch_exe(tmp_path / "releases" / "runtime" / "ffmpeg")
+    parent_runtime = _touch_exe(tmp_path / "releases" / "runtime" / _bin_name("ffmpeg"))
     assert (
         fr.resolve_ffmpeg(env={}, anchor=nested_anchor, which=_no_which)
         == parent_runtime
@@ -91,9 +96,9 @@ def test_nothing_resolves_returns_none(tmp_path: Path) -> None:
 
 
 def test_missing_env_override_falls_through_to_bundled(tmp_path: Path) -> None:
-    bundled = _touch_exe(tmp_path / "anchor" / "runtime" / "ffmpeg")
+    bundled = _touch_exe(tmp_path / "anchor" / "runtime" / _bin_name("ffmpeg"))
     resolved = fr.resolve_ffmpeg(
-        env={fr.FFMPEG_ENV_VAR: str(tmp_path / "does-not-exist" / "ffmpeg")},
+        env={fr.FFMPEG_ENV_VAR: str(tmp_path / "does-not-exist" / _bin_name("ffmpeg"))},
         anchor=tmp_path / "anchor",
         which=_no_which,
     )
@@ -101,7 +106,7 @@ def test_missing_env_override_falls_through_to_bundled(tmp_path: Path) -> None:
 
 
 def test_ffprobe_uses_its_own_env_var(tmp_path: Path) -> None:
-    probe_bin = _touch_exe(tmp_path / "custom" / "ffprobe")
+    probe_bin = _touch_exe(tmp_path / "custom" / _bin_name("ffprobe"))
     resolved = fr.resolve_ffprobe(
         env={fr.FFPROBE_ENV_VAR: str(probe_bin)},
         anchor=tmp_path / "anchor",
@@ -163,7 +168,7 @@ def test_has_loudnorm_parser() -> None:
 
 
 def test_probe_detects_loudnorm_present(tmp_path: Path) -> None:
-    binary = _touch_exe(tmp_path / "ffmpeg")
+    binary = _touch_exe(tmp_path / _bin_name("ffmpeg"))
     result = fr.probe_loudnorm(binary, runner=_fake_runner(_FILTERS_WITH_LOUDNORM))
     assert result.found is True
     assert result.loudnorm_present is True
@@ -172,7 +177,7 @@ def test_probe_detects_loudnorm_present(tmp_path: Path) -> None:
 
 
 def test_probe_detects_loudnorm_absent(tmp_path: Path) -> None:
-    binary = _touch_exe(tmp_path / "ffmpeg")
+    binary = _touch_exe(tmp_path / _bin_name("ffmpeg"))
     result = fr.probe_loudnorm(
         binary, runner=_fake_runner(_FILTERS_WITHOUT_LOUDNORM)
     )
@@ -190,7 +195,7 @@ def test_probe_when_ffmpeg_unresolvable(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_probe_execution_failure_is_recorded(tmp_path: Path) -> None:
-    binary = _touch_exe(tmp_path / "ffmpeg")
+    binary = _touch_exe(tmp_path / _bin_name("ffmpeg"))
 
     def boom(cmd, **kwargs):
         raise FileNotFoundError("no such file")

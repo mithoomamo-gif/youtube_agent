@@ -577,3 +577,93 @@ def test_restart_sweep_dead_letters_and_parks_without_handler(env):
     assert len(_event_log_rows(env["factory"])) == 1
     # Downstream is dead too — a later runner has nothing to claim.
     assert queue.stats().get("queued", 0) == 0
+
+
+def test_recover_and_park_prefers_originator_on_timestamp_tie(env):
+    """Deterministic tie case for the recovery scan's job preference.
+
+    Two dead DAG jobs for one project share IDENTICAL ``created_at`` /
+    ``updated_at`` — exactly what one lease sweep produces when it
+    dead-letters the originating job and propagates
+    ``dependency_failed`` to its downstream in a single transaction.
+    On such a tie the scan's ``ORDER BY updated_at, created_at``
+    guarantees nothing, so :func:`failure_policy.recover_and_park`
+    must still park the project from the *originating*
+    (non-``dependency_failed``) job, regardless of row order.
+
+    Both rows are written exactly as the queue writes them: the code
+    lives only in the single ``error`` column as ``"code: message"``
+    and ``error_code`` stays NULL (the jobs schema has no
+    ``error_message`` column, so the queue's split-field path never
+    populates ``error_code``).  All timestamps are a fixed constant —
+    this test has no wall-clock dependence.
+    """
+    project_id = env["project_id"]
+    tie_ts = 1_700_000_000_000
+
+    def _insert_dead(job_id, kind, stage, error):
+        conn = env["factory"]()
+        try:
+            conn.execute(
+                "INSERT INTO jobs (id, project_id, agent_key, kind, "
+                "payload_json, status, attempts, max_attempts, error, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'dead', "
+                "2, 2, ?, ?, ?)",
+                (
+                    job_id,
+                    project_id,
+                    kind,
+                    kind,
+                    json.dumps({"project_id": project_id, "stage": stage}),
+                    error,
+                    tie_ts,
+                    tie_ts,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # Originator inserted first, downstream job second: with every
+    # ORDER BY key tied, row order is unspecified — in practice the
+    # scan walks ``idx_jobs_status_time`` (``updated_at DESC``)
+    # backwards for the ASC sort, so the later-inserted downstream row
+    # surfaces FIRST.  A first-row-wins scan — or one whose preference
+    # guard compares the never-populated ``error_code`` column instead
+    # of the ``error`` prefix — then parks from the dependency_failed
+    # row instead of the originator.  The fixed preference logic is
+    # order-independent, so the assertions below hold either way.
+    _insert_dead(
+        "job-tie-research", "stage.research", "research",
+        "lease_expired: lease expired and attempts exhausted "
+        "(worker presumed dead)",
+    )
+    _insert_dead(
+        "job-tie-script", "stage.script", "script",
+        "dependency_failed: dependency job failed or died",
+    )
+
+    hub = RecordingHub()
+    result = failure_policy.recover_and_park(
+        env["factory"], queue=None, events=hub
+    )
+    assert result["parked"] == [project_id]
+
+    project = _project(env["factory"], project_id)
+    assert project["status"] == "failed"
+    summary = project["error_summary"] or ""
+    assert "research" in summary
+    assert "lease_expired" in summary
+    assert "dependency_failed" not in summary
+
+    live = hub.by_type("project.failed")
+    assert len(live) == 1
+    assert live[0]["job_id"] == "job-tie-research"
+    assert live[0]["payload"]["stage"] == "research"
+    assert live[0]["payload"]["error_code"] == "lease_expired"
+
+    rows = _event_log_rows(env["factory"])
+    assert len(rows) == 1
+    persisted = json.loads(rows[0]["payload_json"])["payload"]
+    assert persisted["stage"] == "research"
+    assert persisted["error_code"] == "lease_expired"

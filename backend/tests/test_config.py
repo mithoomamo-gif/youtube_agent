@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.config import Settings, load_settings
+from app.data_dir import is_windows_platform
 from app.redaction import REDACTED, redact_obj, redact_text
 
 FULL_ENV = {
@@ -47,8 +48,13 @@ def test_load_settings_defaults() -> None:
     assert settings.log_level == "info"
     assert settings.detached is False
     assert settings.boot_id  # generated when not supplied
-    # No YTA_DATA_DIR and no APPDATA in the mapping -> ~/.youtube-agent
-    assert settings.data_dir == Path.home() / ".youtube-agent"
+    # No YTA_DATA_DIR and no APPDATA in the mapping -> platform default:
+    # %APPDATA%\YouTubeAgent (Roaming reconstructed) on Windows,
+    # otherwise ~/.youtube-agent
+    if is_windows_platform():
+        assert settings.data_dir == Path.home() / "AppData" / "Roaming" / "YouTubeAgent"
+    else:
+        assert settings.data_dir == Path.home() / ".youtube-agent"
 
 
 def test_load_settings_detached_false_values() -> None:

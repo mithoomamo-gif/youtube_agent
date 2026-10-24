@@ -239,7 +239,7 @@ def _scan_roots(roots: list[str]) -> list[tuple[str, int, str, str]]:
             text = _read_for_scan(path)
         except OSError:
             continue
-        rel = str(path.relative_to(REPO_ROOT))
+        rel = path.relative_to(REPO_ROOT).as_posix()
         for lineno, name, value in scan_text(text):
             hits.append((rel, lineno, name, _fingerprint(value)))
     return hits
@@ -283,7 +283,7 @@ def test_generated_outputs_have_zero_secret_shaped_hits():
             text = _read_for_scan(path)
         except OSError:
             continue
-        rel = str(path.relative_to(REPO_ROOT))
+        rel = path.relative_to(REPO_ROOT).as_posix()
         for lineno, name, value in scan_text(text):
             hits.append((rel, lineno, name, _fingerprint(value)))
     assert hits == [], (
@@ -351,7 +351,7 @@ def test_test_tree_fixtures_are_exactly_the_allowlisted_ones():
             text = _read_for_scan(path)
         except OSError:
             continue
-        rel = str(path.relative_to(REPO_ROOT))
+        rel = path.relative_to(REPO_ROOT).as_posix()
         for lineno, name, value in scan_text(text):
             base = name.split(":", 1)[0]
             key = (rel, name) if (rel, name) in FIXTURE_ALLOWLIST else (rel, base)

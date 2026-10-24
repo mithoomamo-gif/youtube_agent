@@ -106,7 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     try:
         from app import db as db_module
 
-        db_module.init_db(settings.db_path)
+        db_module.init_db(settings.db_path).close()
         app.state.db_path = settings.db_path
         app.state.db = db_module.connect(settings.db_path)
     except Exception as exc:  # noqa: BLE001 — boot must survive a broken DB
