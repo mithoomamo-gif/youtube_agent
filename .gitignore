@@ -69,6 +69,10 @@ build/
 dist-sidecar/
 packaging/dist-sidecar/
 *.spec
+# …but the sidecar freeze spec is a hand-authored SOURCE input to
+# packaging/build_sidecar.ps1 (it fails without it), not a generated
+# artefact — it must be committed or clean checkouts cannot freeze.
+!packaging/yta_sidecar.spec
 __pypackages__/
 
 # ─── Secrets — NEVER commit ──────────────────────────────────────────────────

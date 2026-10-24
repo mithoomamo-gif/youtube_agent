@@ -42,6 +42,24 @@ HANDLE = f"E2eRival{_SUFFIX[:8]}"
 
 HONEST_METADATA_STATES = ("fetched", "metadata_unavailable", "fetch_failed")
 
+# The step-6 profile payload is the Round-3 proof profile (patterns
+# only). A byte-identical copy is committed as a test fixture so this
+# file also passes in clean checkouts — outputs/ is fully gitignored
+# and never reaches CI. The fixture is preferred; the live proof
+# artifact stays as the fallback on dev machines if the fixture is
+# ever removed. (Same pattern as test_stylelab_profile_boundary.py.)
+_FIXTURE_PATH = (
+    Path(__file__).resolve().parent
+    / "fixtures" / "stylelab" / "style_profile.json"
+)
+_OUTPUTS_PROOF_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "outputs" / "stylelab" / "proof" / "style_profile.json"
+)
+_PROOF_PATH = (
+    _FIXTURE_PATH if _FIXTURE_PATH.is_file() else _OUTPUTS_PROOF_PATH
+)
+
 
 def _seed_channels() -> None:
     from app import db as db_module
@@ -210,9 +228,7 @@ def test_style_lab_full_intake_flow(
     # arbitrary-JSON behaviour SL-001 closed; the payload below is the
     # proof profile shape, re-scoped to this channel, and the persisted
     # profile is the schema's canonical dump, which round-trips exactly.
-    proof_path = (Path(__file__).resolve().parents[2] / "outputs"
-                  / "stylelab" / "proof" / "style_profile.json")
-    profile_payload = json.loads(proof_path.read_text(encoding="utf-8"))
+    profile_payload = json.loads(_PROOF_PATH.read_text(encoding="utf-8"))
     profile_payload["channel_id"] = CHAN_A
     p1_resp = client.post(
         f"/api/v1/channels/{CHAN_A}/style-profiles",

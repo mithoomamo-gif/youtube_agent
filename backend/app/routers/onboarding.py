@@ -135,10 +135,19 @@ def _youtube_state() -> dict:
         from app.routers import channels as channels_router
 
         for channel in channels_router._list_channels():
-            status = str(
-                channel.get("status") or channel.get("connect_status") or ""
-            ).lower()
-            if status in ("connected", "active"):
+            # "Connected" is the OAuth connect state — config_json's
+            # connect_status, surfaced onto the public row by
+            # _list_channels: "connected", or "needs_audit_check"
+            # (token stored, channel linked, compliance audit still
+            # pending). The lifecycle column (active/paused/...) only
+            # says the channel record is enabled: a locally-created
+            # channel that never went through OAuth is NOT a connected
+            # YouTube channel and must never be reported as one.
+            connect_status = str(channel.get("connect_status") or "").lower()
+            if connect_status in (
+                channels_router.CONNECT_CONNECTED,
+                channels_router.CONNECT_NEEDS_AUDIT_CHECK,
+            ):
                 connected_channels.append(
                     {
                         "id": channel.get("id"),

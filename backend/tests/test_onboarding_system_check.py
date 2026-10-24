@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -328,7 +329,59 @@ def test_system_check_endpoint_ffmpeg_missing_is_failure(client, monkeypatch):
     assert resp.json()["overall"] == "fail"
 
 
-def test_status_endpoint_honest_key_states(client, fake_keyring):
+@pytest.fixture()
+def no_preexisting_channels(client):
+    """Isolate the status test's YouTube leg from other suites' rows.
+
+    The backend suite shares ONE session DB (see tests/conftest.py),
+    and suites collected earlier seed realistic channel rows into it —
+    including OAuth-state rows (connect_status in config_json) from
+    the channels-connect suite. The status test's premise is a fresh
+    install ("nothing saved yet"), so soft-delete every live channel
+    row for its duration and restore exactly those rows afterwards.
+    Assertions are untouched; this is isolation, not leniency.
+    """
+    from app import db as db_module
+
+    def _live_ids(conn):
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(channels)")}
+        if "deleted_at" not in cols:
+            return None
+        return [
+            row[0]
+            for row in conn.execute(
+                "SELECT id FROM channels WHERE deleted_at IS NULL"
+            )
+        ]
+
+    conn = db_module.get_connection()
+    try:
+        live_ids = _live_ids(conn)
+        if live_ids:
+            now = int(time.time() * 1000)
+            conn.execute(
+                "UPDATE channels SET deleted_at = ? "
+                "WHERE deleted_at IS NULL",
+                (now,),
+            )
+    finally:
+        conn.close()
+    yield
+    if live_ids:
+        conn = db_module.get_connection()
+        try:
+            for channel_id in live_ids:
+                conn.execute(
+                    "UPDATE channels SET deleted_at = NULL WHERE id = ?",
+                    (channel_id,),
+                )
+        finally:
+            conn.close()
+
+
+def test_status_endpoint_honest_key_states(
+    client, fake_keyring, no_preexisting_channels
+):
     # Nothing saved yet.
     body = client.get("/api/v1/onboarding/status").json()
     assert body["completed"] is False

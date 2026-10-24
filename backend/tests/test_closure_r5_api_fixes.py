@@ -32,6 +32,16 @@ from app.comments.store import (
 from tests.execution_fixtures import make_db
 
 _SUFFIX = uuid.uuid4().hex[:10]
+# The suite shares ONE session DB and niche_profiles.key is UNIQUE.
+# This module's profile is private scaffolding (an FK target for its
+# schedule row), so it must NOT squat the builtin key 'facts' under a
+# private id: the app invariant is builtin key == profile id, and other
+# suites (e.g. test_schedules_api) seed/resolve the canonical 'facts'
+# row by id. A 'facts'-keyed look-alike row makes their INSERT OR
+# IGNORE a silent no-op and their channel FK insert fail. The learning
+# rule below still uses the niche STRING 'facts' — that is a store
+# scope label, unrelated to niche_profiles.
+NICHE_KEY = f"closure-facts-{_SUFFIX}"
 PW_CHAN = f"closure-pw-{_SUFFIX}"
 CM_CHAN = f"closure-cm-{_SUFFIX}"
 CM_COMMENT = f"UgxClosure{_SUFFIX}"
@@ -63,12 +73,12 @@ def _seed_publish_window_repro() -> None:
         conn.execute(
             "INSERT OR IGNORE INTO niche_profiles (id, key, label,"
             " source, created_at, updated_at)"
-            " VALUES (?, 'facts', 'Facts', 'builtin', ?, ?)",
-            (f"np-closure-{_SUFFIX}", now, now),
+            " VALUES (?, ?, 'Facts', 'builtin', ?, ?)",
+            (f"np-closure-{_SUFFIX}", NICHE_KEY, now, now),
         )
         conn.commit()
         niche_id = conn.execute(
-            "SELECT id FROM niche_profiles WHERE key = 'facts'"
+            "SELECT id FROM niche_profiles WHERE key = ?", (NICHE_KEY,)
         ).fetchone()[0]
         conn.execute(
             "INSERT OR IGNORE INTO schedules (id, name, channel_id,"

@@ -30,7 +30,14 @@ from app import schema_ddl  # noqa: E402,F401
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False is load-bearing: fileConfig's
+    # default (True) permanently sets .disabled=True on EVERY logger
+    # that exists when a migration runs. In the app process that
+    # silently kills all logging configured before migrations; in the
+    # test suite it poisoned later caplog assertions in unrelated
+    # files (e.g. test_tts_calibration_planning) depending on run
+    # order. The ini still configures root/alembic/sqlalchemy.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = None
 

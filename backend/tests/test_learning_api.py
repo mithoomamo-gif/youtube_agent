@@ -90,13 +90,33 @@ def _niche_profile_id(key: str) -> str:
     from app import db as db_module
 
     now = _now_ms()
+    # The suite shares ONE session DB and niche_profiles.key is UNIQUE.
+    # For a BUILTIN key the seeded row must be the canonical builtin
+    # profile (id == key, library label/voice — the app invariant in
+    # app/niches/builtins.py). Seeding a look-alike row under a private
+    # id (the old f"np-{key}") squats the key: other suites that seed
+    # or resolve the builtin by id (e.g. test_schedules_api) then get a
+    # silent INSERT OR IGNORE no-op followed by an FK failure.
+    profile_id = f"np-{key}"
+    label = key.replace("_", " ").title()
+    voice_style = None
+    try:
+        from app.niches.builtins import BUILTIN_PROFILES
+
+        builtin = BUILTIN_PROFILES.get(key)
+    except Exception:  # pragma: no cover - library always present
+        builtin = None
+    if builtin is not None:
+        profile_id = key
+        label = builtin.name
+        voice_style = builtin.voice_style
     conn = db_module.get_connection()
     try:
         conn.execute(
             "INSERT OR IGNORE INTO niche_profiles (id, key, label,"
-            " source, created_at, updated_at)"
-            " VALUES (?, ?, ?, 'builtin', ?, ?)",
-            (f"np-{key}", key, key.replace("_", " ").title(), now, now),
+            " source, voice_style, created_at, updated_at)"
+            " VALUES (?, ?, ?, 'builtin', ?, ?, ?)",
+            (profile_id, key, label, voice_style, now, now),
         )
         row = conn.execute(
             "SELECT id FROM niche_profiles WHERE key = ?", (key,)

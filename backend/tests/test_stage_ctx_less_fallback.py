@@ -12,6 +12,7 @@ cannot rely on.
 
 from __future__ import annotations
 
+import tempfile
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -63,7 +64,13 @@ def test_voice_stage_ctx_less_writes_under_data_dir(
     expected = data_dir / "tmp" / "voice"
     assert captured["audio_dir"] == expected
     assert Path(result.narration_wav).is_relative_to(expected)
-    assert not str(result.narration_wav).startswith("/tmp/")
+    # The forbidden location is the legacy hard-coded bare-temp stage
+    # dir (<os-temp>/voice) — NOT any path that merely sits under a
+    # /tmp-rooted pytest basetemp (CI's tmp_path lives under /tmp, and
+    # the data dir under it is exactly where the write belongs).
+    assert not Path(result.narration_wav).is_relative_to(
+        Path(tempfile.gettempdir()) / "voice"
+    )
 
 
 def test_visuals_stage_ctx_less_writes_under_data_dir(
@@ -92,4 +99,9 @@ def test_visuals_stage_ctx_less_writes_under_data_dir(
     assert result.scene_manifest, "expected at least one planned scene"
     for scene in result.scene_manifest:
         assert Path(scene["asset_path"]).is_relative_to(expected)
-        assert not str(scene["asset_path"]).startswith("/tmp/")
+        # Same guard as the voice test: the legacy bare-temp stage dir
+        # (<os-temp>/visuals) is forbidden; a /tmp-rooted pytest
+        # basetemp holding the data dir is fine.
+        assert not Path(scene["asset_path"]).is_relative_to(
+            Path(tempfile.gettempdir()) / "visuals"
+        )

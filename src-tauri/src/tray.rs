@@ -108,7 +108,7 @@ fn tooltip_for(label: &str) -> String {
 /// (the shipping target). Tauri documents that on *Linux* a set menu
 /// cannot be replaced — irrelevant here, noted only so nobody ports
 /// this pattern blindly.
-fn build_menu(app: &AppHandle, label: &str) -> Result<Menu, tauri::Error> {
+fn build_menu(app: &AppHandle, label: &str) -> Result<Menu<tauri::Wry>, tauri::Error> {
     // DISABLED status line: `enabled = false`. It is a readout, not a
     // button — Windows greys it out and it can never be clicked.
     let status_item = MenuItem::with_id(app, ID_STATUS, label, false, None::<&str>)?;
@@ -127,13 +127,13 @@ fn build_menu(app: &AppHandle, label: &str) -> Result<Menu, tauri::Error> {
     Menu::with_items(
         app,
         &[
-            &status_item as &dyn IsMenuItem,
-            &separator_top as &dyn IsMenuItem,
-            &open_item as &dyn IsMenuItem,
-            &pause_item as &dyn IsMenuItem,
-            &stop_item as &dyn IsMenuItem,
-            &separator_bottom as &dyn IsMenuItem,
-            &quit_item as &dyn IsMenuItem,
+            &status_item as &dyn IsMenuItem<tauri::Wry>,
+            &separator_top as &dyn IsMenuItem<tauri::Wry>,
+            &open_item as &dyn IsMenuItem<tauri::Wry>,
+            &pause_item as &dyn IsMenuItem<tauri::Wry>,
+            &stop_item as &dyn IsMenuItem<tauri::Wry>,
+            &separator_bottom as &dyn IsMenuItem<tauri::Wry>,
+            &quit_item as &dyn IsMenuItem<tauri::Wry>,
         ],
     )
 }
