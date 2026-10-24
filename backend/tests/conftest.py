@@ -78,7 +78,24 @@ def app(settings):
     except Exception as exc:  # pragma: no cover - parallel-build tolerance
         print(f"conftest: app.db.init_db unavailable/skipped: {exc!r}")
 
-    return application
+    yield application
+
+    # Teardown: close the app's live DB connection so a finished test
+    # never leaks an open handle into the rest of the session. Every app
+    # in the session points at the SAME app.db (session-wide
+    # YTA_DATA_DIR above), and on Windows an open handle blocks
+    # os.replace of that file — the backup-restore release-gate failure.
+    # The app's own shutdown handler covers apps run under a TestClient
+    # (its exit runs the shutdown events); this teardown covers apps a
+    # test built bare, and is a harmless no-op when the handler already
+    # closed the connection (state.db is None by then).
+    _live_db = getattr(application.state, "db", None)
+    if _live_db is not None:
+        try:
+            _live_db.close()
+        except Exception as exc:  # pragma: no cover - teardown tolerance
+            print(f"conftest: closing app.state.db failed: {exc!r}")
+        application.state.db = None
 
 
 @pytest.fixture()

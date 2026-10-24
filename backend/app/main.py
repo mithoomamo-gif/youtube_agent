@@ -166,6 +166,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     except Exception:  # very new FastAPI: fall back to router hook list
         app.router.on_startup.append(_announce_listening)  # type: ignore[attr-defined]
 
+    # -- shutdown: close the live DB connection ------------------------------
+    # The app owns exactly one long-lived sqlite3 connection
+    # (app.state.db, opened by the DB wiring above). Until now nothing
+    # closed it at shutdown, so every app instance leaked its handle for
+    # the life of the process — and on Windows a still-open handle blocks
+    # replacing the database file, which is what made backup restore
+    # fail in a full-suite process full of earlier tests' leaked handles.
+    # This handler pairs the connect(): it runs on every graceful
+    # shutdown (uvicorn stop, TestClient exit). Tolerant by design: the
+    # restore flow may already have closed the handle and set it to None
+    # (then there is nothing to do), and a failed close is logged, never
+    # raised — shutdown must not turn into a crash.
+    def _close_db_on_shutdown() -> None:
+        conn = getattr(app.state, "db", None)
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:
+            logger.warning(
+                "shutdown: closing the app database connection failed",
+                exc_info=True,
+            )
+        app.state.db = None
+
+    # Exposed for run()/tests, and registered as a FastAPI shutdown event
+    # (same on_event pattern as the startup announcement above: passing a
+    # constructor lifespan instead would make Starlette skip the
+    # on_startup handlers this app relies on).
+    app.state.on_shutdown = _close_db_on_shutdown
+    try:
+        app.add_event_handler("shutdown", _close_db_on_shutdown)
+    except Exception:  # very new FastAPI: fall back to router hook list
+        app.router.on_shutdown.append(_close_db_on_shutdown)  # type: ignore[attr-defined]
+
     # -- error envelope -------------------------------------------------------
     try:
         from app.errors import register_exception_handlers
