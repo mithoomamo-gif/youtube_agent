@@ -386,3 +386,169 @@ jobs:
             exit 1
           fi
           echo "Secret scan passed — no key-shaped strings in tracked files."
+
+  # ---------------------------------------------------------------------------
+  # Windows verify — gate mirror (user-approved strategy change, 2026-10-25).
+  # This job is a step-for-step copy of the `verify` job in release.yml
+  # (the release gate), minus the release-only `needs: preflight` wiring.
+  # It runs the FULL gate-equivalent suite (UI typecheck + build, backend
+  # suite, root suite, packaging/windows-test-skips.txt applied the same
+  # way, FFmpeg pinned to choco 8.1.0) on windows-latest during regular CI
+  # so Windows-only/flaky weaknesses surface here — in cheap CI runs —
+  # instead of at release-tag time. KEEP IN STEP WITH release.yml: if the
+  # release gate's verify steps change, mirror the change here (and vice
+  # versa). Runs independently: it is not a dependency of any other job.
+  # ---------------------------------------------------------------------------
+  windows-verify:
+    name: Windows verify (gate mirror)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # No engines field in package.json and no .nvmrc in the repo, so the
+      # release builds on the same LTS line as CI (Node 20) — the line the
+      # baselines above were measured on. Bump deliberately, with CI.
+      - name: Set up Node 20 (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      # backend/pyproject.toml requires Python >=3.12 — pin the line.
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install frontend dependencies (npm ci)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path "package-lock.json") { npm ci } else { npm install }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: UI typecheck
+        shell: pwsh
+        run: |
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: UI build
+        shell: pwsh
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install backend dependencies + pytest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $found = $false
+          foreach ($req in @("backend/requirements.txt", "requirements.txt", "backend/requirements-dev.txt", "requirements-dev.txt")) {
+            if (Test-Path $req) {
+              Write-Host "Installing from $req"
+              pip install -r $req
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $found = $true
+            }
+          }
+          if (Test-Path "backend/pyproject.toml") {
+            pip install -e "backend[dev]"
+            if ($LASTEXITCODE -ne 0) { pip install -e backend }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $found = $true
+          } elseif (Test-Path "pyproject.toml") {
+            pip install -e ".[dev]"
+            if ($LASTEXITCODE -ne 0) { pip install -e . }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $found = $true
+          }
+          if (-not $found) { throw "No backend requirements.txt / pyproject.toml found — the release gate cannot run without the backend." }
+          python -c "import pytest" 2>$null
+          if ($LASTEXITCODE -ne 0) { pip install pytest; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+
+      - name: Install FFmpeg (the suites shell out to ffmpeg / ffprobe)
+        shell: pwsh
+        run: |
+          # Pinned to the 8.1 series — the same generation the product
+          # bundles (packaging/ffmpeg-pin.json: BtbN n8.1.3). Unpinned choco
+          # installs drifted to FFmpeg 9.x, whose CLI removals failed the
+          # gate (patch v9 diagnosis). 8.1.0 is the 8.1-series version
+          # published on Chocolatey (Approved). Bump deliberately, in step
+          # with ffmpeg-pin.json.
+          choco install ffmpeg --version 8.1.0 -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Backend + root test suites (Windows skip list applied)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # --- Load the documented Windows skip list, if it has landed. ---
+          $skipFile = "packaging/windows-test-skips.txt"
+          $skipIds = @()
+          if (Test-Path $skipFile) {
+            $skipIds = @(Get-Content $skipFile | ForEach-Object {
+              # File format is "<node-id>  # <reason>": strip everything
+              # from the first " #" onward before matching; blank lines
+              # and pure comment lines are skipped below.
+              $line = "$_"
+              $hashIdx = $line.IndexOf(" #")
+              if ($hashIdx -ge 0) { $line = $line.Substring(0, $hashIdx) }
+              $line.Trim()
+            } | Where-Object { $_ -ne "" -and -not $_.StartsWith("#") })
+            Write-Host "Windows skip list: $($skipIds.Count) entr(ies) loaded from $skipFile. Each is a pytest node id and is excused ONLY via --deselect; nothing else is excused."
+          } else {
+            Write-Host "::warning::$skipFile is not present yet (packaging-team dependency) — running the full suites with zero Windows deselections."
+          }
+          $matchedSkip = @{}
+          function Invoke-GatedSuite {
+            param([string]$Label, [string]$WorkDir, [string]$MarkExpr)
+            Write-Host "=== Release gate suite: $Label (marks: $MarkExpr) ==="
+            Push-Location $WorkDir
+            try {
+              # Collect first so every --deselect names a node id that
+              # actually exists in THIS suite's collection on THIS runner;
+              # a skip entry that matches nothing is reported, never
+              # silently swallowed.
+              $collectOut = & python -m pytest tests/ --collect-only -q -m $MarkExpr 2>&1
+              if ($LASTEXITCODE -ne 0) { throw "Test collection failed for $Label (exit $LASTEXITCODE)." }
+              $collected = @($collectOut | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '\.py::' })
+              $deselects = @()
+              foreach ($entry in $skipIds) {
+                $hit = $collected | Where-Object { $_ -eq $entry -or $entry.EndsWith($_) -or $_.EndsWith($entry) } | Select-Object -First 1
+                if ($hit) { $deselects += $hit; $matchedSkip[$entry] = $true }
+              }
+              $deselects = @($deselects | Select-Object -Unique)
+              if ($deselects.Count -gt 0) { Write-Host "Applying $($deselects.Count) documented Windows deselection(s) to $Label." }
+              $pytestArgs = @("-m", "pytest", "tests/", "-q", "-m", $MarkExpr)
+              foreach ($d in $deselects) { $pytestArgs += "--deselect"; $pytestArgs += $d }
+              Write-Host "Running: python $($pytestArgs -join ' ')"
+              & python @pytestArgs
+              if ($LASTEXITCODE -ne 0) {
+                throw "RELEASE GATE FAILED — $Label exited $LASTEXITCODE. Any test failure outside the documented Windows skip list blocks the release."
+              }
+              Write-Host "Suite passed: $Label"
+            } finally { Pop-Location }
+          }
+          # Backend suite: backend/pytest.ini registers only the `live`
+          # marker (same expression CI uses for this suite).
+          Invoke-GatedSuite -Label "backend suite (backend/tests)" -WorkDir "backend" -MarkExpr "not live"
+          # Root suite: tests/pytest.ini registers unit/contract/
+          # integration/ffmpeg/live/golden/slow (same expression CI uses).
+          Invoke-GatedSuite -Label "root suite (tests/)" -WorkDir "." -MarkExpr "not live and not slow and not golden"
+          foreach ($entry in $skipIds) {
+            if (-not $matchedSkip.ContainsKey($entry)) {
+              Write-Host "::warning::Skip-list entry matched no collected test in either suite (stale entry?): $entry"
+            }
+          }
+          Write-Host "Release gate: all suites green."

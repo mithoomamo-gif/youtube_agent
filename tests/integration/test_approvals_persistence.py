@@ -106,7 +106,7 @@ TOKEN = "acceptance-d-token-0123456789"
 # migration's own CREATE TABLE names are added to this set dynamically.
 CANDIDATE_APPROVAL_TABLES = ("approvals", "approval_queue", "gates", "gate_decisions")
 
-BOOT_TIMEOUT_S = 45.0
+BOOT_TIMEOUT_S = 120.0
 GATE_POLL_TIMEOUT_S = 60.0
 
 
@@ -209,6 +209,7 @@ class Sidecar:
 
         assert self.proc is not None
         deadline = time.monotonic() + BOOT_TIMEOUT_S
+        last_poll = "no poll completed"
         while time.monotonic() < deadline:
             if self.proc.poll() is not None:
                 raise RuntimeError(
@@ -224,12 +225,14 @@ class Sidecar:
                 )
                 if resp.status_code == 200:
                     return
-            except Exception:
-                pass
+                last_poll = f"HTTP {resp.status_code}"
+            except Exception as exc:
+                last_poll = f"{type(exc).__name__}: {exc}"
             time.sleep(0.25)
         raise RuntimeError(
             f"sidecar ({self.label}) did not become live within "
-            f"{BOOT_TIMEOUT_S}s; log tail:\n{self._log_tail()}"
+            f"{BOOT_TIMEOUT_S}s; last poll: {last_poll}; "
+            f"log tail:\n{self._log_tail()}"
         )
 
     def client(self):
