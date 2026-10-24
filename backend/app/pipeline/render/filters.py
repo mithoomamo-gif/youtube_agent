@@ -1,7 +1,7 @@
 """Programmatic ffmpeg filter-graph construction for one segment.
 
 Graphs are built here as strings, then written to a ``.txt`` file and passed
-to ffmpeg via ``-filter_complex_script`` — never inlined into the command
+to ffmpeg via ``-/filter_complex`` — never inlined into the command
 line (Windows command-line length limits; a long video's graphs are large
 and machine-generated labels keep failures mappable to scene ids).
 
@@ -35,7 +35,7 @@ def _cover_chain() -> str:
 
 
 def build_filter_graph(spec: SceneSpec) -> str:
-    """Return the ``-filter_complex_script`` contents for one segment.
+    """Return the ``-/filter_complex`` contents for one segment.
 
     Input layout (the renderer adds inputs in this order):
       * input 0 — the scene source (video clip / still image / lavfi colour)

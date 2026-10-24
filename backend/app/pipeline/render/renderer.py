@@ -6,7 +6,7 @@ Hard rules honoured here:
   * D2 — segments are video-only; the mastered audio is attached once, by
     :func:`mux_final` / the tier builders, never inside a segment.
   * D3 — NO cross-segment dissolves.  Concatenation is pure stream copy.
-  * Filter graphs go through a ``-filter_complex_script`` FILE, never an
+  * Filter graphs go through a ``-/filter_complex`` FILE, never an
     inlined command-line graph.
   * Segments are written to ``<name>.tmp.ts`` and atomically renamed; a
     file under its final name is by definition complete (resume = skip +
@@ -206,7 +206,7 @@ class SegmentRenderer:
         for overlay in spec.text_overlays:
             cmd += ["-i", overlay.png_path]
         cmd += [
-            "-filter_complex_script", str(graph_path),
+            "-/filter_complex", str(graph_path),
             "-map", "[vout]",
             "-an",  # D2: segments never carry audio
             *self.encoder_choice.args("segment"),

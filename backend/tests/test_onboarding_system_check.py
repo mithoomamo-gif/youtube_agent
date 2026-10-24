@@ -330,8 +330,24 @@ def test_system_check_endpoint_shape_and_honesty(client):
 
 def test_system_check_endpoint_ffmpeg_missing_is_failure(client, monkeypatch):
     real_which = shutil.which
+
+    def _which_without_ffmpeg(name):
+        # Airtight block: the resolver asks for "ffmpeg.exe"/"ffprobe.exe"
+        # on win32 (see app.ffmpeg_resolution._exe_name), so an exact
+        # match on "ffmpeg" leaks on Windows and the check honestly
+        # finds the installed binary. Block by prefix, case-insensitively.
+        if str(name).lower().startswith(("ffmpeg", "ffprobe")):
+            return None
+        return real_which(name)
+
+    monkeypatch.setattr(shutil, "which", _which_without_ffmpeg)
+    # Full hermeticity: the resolver checks env overrides and bundled
+    # candidates before PATH, so a stray YTA_*_PATH or a bundled
+    # runtime binary must not resurrect ffmpeg for this test either.
+    monkeypatch.delenv("YTA_FFMPEG_PATH", raising=False)
+    monkeypatch.delenv("YTA_FFPROBE_PATH", raising=False)
     monkeypatch.setattr(
-        shutil, "which", lambda name: None if name == "ffmpeg" else real_which(name)
+        "app.ffmpeg_resolution.bundled_candidates", lambda *args, **kwargs: []
     )
     resp = client.get("/api/v1/onboarding/system-check")
     assert resp.status_code == 200

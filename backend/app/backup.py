@@ -771,11 +771,13 @@ def restore_backup(
 
         safety_copy = _safety_copy(db_path, data_dir)
 
-        if before_install is not None:
-            before_install()
-
         # Checkpoint any WAL on the outgoing DB and drop its sidecars:
         # a stale -wal replayed onto the restored file would corrupt it.
+        # This must run BEFORE the before_install close hook: the hook
+        # closes the app's long-lived connection so the file can be
+        # replaced on Windows, and the live DB must never be re-opened
+        # after that hook has run (a fresh connection here would hold
+        # the file open again at os.replace time).
         try:
             conn = db_module.connect(db_path)
             try:
@@ -784,6 +786,9 @@ def restore_backup(
                 conn.close()
         except Exception:
             pass
+
+        if before_install is not None:
+            before_install()
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
         install_tmp = db_path.parent / f".app.db.restore-{os.getpid()}.tmp"

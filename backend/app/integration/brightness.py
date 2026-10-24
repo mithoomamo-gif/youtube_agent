@@ -146,7 +146,7 @@ def measure_brightness_yavg(
     # Primary: keyframe-only sampling (one pass, cheap for UHD).
     stderr = _run_ffmpeg([
         ffmpeg, "-v", "info", "-skip_frame", "nokey",
-        "-i", str(media), "-vf", vf, "-vsync", "vfr",
+        "-i", str(media), "-vf", vf, "-fps_mode", "vfr",
         "-f", "null", "-",
     ])
     values = _parse_yavg(stderr) if stderr is not None else []

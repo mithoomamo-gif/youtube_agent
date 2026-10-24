@@ -68,7 +68,9 @@ def default_db_path() -> Path:
 
 def connect(db_path: PathLike) -> sqlite3.Connection:
     """Open a connection with row factory and all section-15 pragmas set."""
-    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    conn = sqlite3.connect(
+        str(db_path), isolation_level=None, check_same_thread=False
+    )
     conn.row_factory = sqlite3.Row
     for pragma in PRAGMAS:
         conn.execute(pragma)

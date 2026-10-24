@@ -220,6 +220,28 @@ def test_frozen_layout_bundled_binary_resolves_and_probes(tmp_path: Path) -> Non
     runtime_dir = anchor / "runtime"
     runtime_dir.mkdir(parents=True)
     real = Path(shutil.which("ffmpeg"))
+    if sys.platform.startswith("win"):
+        # On Windows, Chocolatey's ffmpeg is a shimgen stub, not the real
+        # binary: it locates its real target relative to its own path
+        # (..\lib\ffmpeg\tools\ffmpeg\bin\ffmpeg.exe). Symlinking the shim
+        # still works (the link resolves to the shim in place), but the
+        # copy2 fallback below would stage a stub whose relative target is
+        # missing, so the probe fails with the shim's own "missing or
+        # moved file" text even though resolution is correct. Dereference
+        # the shim to the real binary before staging when that layout is
+        # present, so whichever staging path is taken stages a real binary.
+        real = real.resolve()
+        shim_target = (
+            real.parent.parent
+            / "lib"
+            / "ffmpeg"
+            / "tools"
+            / "ffmpeg"
+            / "bin"
+            / real.name
+        )
+        if shim_target.exists():
+            real = shim_target
     staged = runtime_dir / real.name
     try:
         staged.symlink_to(real)

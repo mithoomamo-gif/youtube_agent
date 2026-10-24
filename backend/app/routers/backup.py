@@ -20,6 +20,7 @@ route):
 
 from __future__ import annotations
 
+import logging
 import tempfile
 import time
 from pathlib import Path
@@ -36,6 +37,8 @@ from app.backup import (
     restore_backup,
 )
 from app.errors import ApiError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/settings/backup", tags=["backup"])
 
@@ -157,11 +160,20 @@ async def import_backup(
                 try:
                     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 except Exception:
-                    pass
+                    logger.warning(
+                        "backup restore: WAL checkpoint of the live "
+                        "database connection failed",
+                        exc_info=True,
+                    )
                 try:
                     conn.close()
                 except Exception:
-                    pass
+                    logger.warning(
+                        "backup restore: closing the live database "
+                        "connection failed — the database file may "
+                        "stay locked and the restore may be refused",
+                        exc_info=True,
+                    )
                 app.state.db = None
 
         try:
