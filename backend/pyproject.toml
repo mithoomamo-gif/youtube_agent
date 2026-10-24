@@ -25,6 +25,14 @@ dependencies = [
     # faster-whisper stack, which broke clean installs (CI run #1).
     "numpy>=1.26",
     "edge-tts>=7",
+    # tzdata supplies the IANA time-zone database for zoneinfo on
+    # platforms that ship none — Windows in particular. Without it,
+    # module-level ZoneInfo("America/Los_Angeles") (app.providers
+    # .youtube.quota, app.pipeline.publishing.scheduler) raises
+    # ZoneInfoNotFoundError at import time on Windows, which failed
+    # release-gate test collection (Release run 40080663633, exit 2)
+    # and would break the packaged sidecar the same way at runtime.
+    "tzdata",
 ]
 
 [project.optional-dependencies]
