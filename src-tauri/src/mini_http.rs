@@ -47,16 +47,6 @@ pub fn post(url: &str, token: Option<&str>) -> Result<(u16, String), String> {
     request("POST", url, token, None)
 }
 
-/// `POST <url>` with a body (e.g. a JSON settings payload).
-pub fn post_body(
-    url: &str,
-    token: Option<&str>,
-    content_type: &str,
-    body: &[u8],
-) -> Result<(u16, String), String> {
-    request("POST", url, token, Some((content_type, body)))
-}
-
 /// `PUT <url>` with a body — used for `PUT /api/v1/settings`, the
 /// backend's real surface for the persisted execution flags
 /// (`execution.pause_all` / `execution.stop_all`, see

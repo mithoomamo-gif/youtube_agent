@@ -35,7 +35,7 @@ use std::cmp::Ordering;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::UpdaterExt;
 
 /// Event emitted to the WebView when a *background* check finds an
