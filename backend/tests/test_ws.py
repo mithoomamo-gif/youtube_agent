@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -254,8 +255,16 @@ def test_check_heartbeats_closes_stale_connections():
     assert stale_fake.close_code == 1013
     assert fresh_fake.close_code is None
     assert hub.connection_count == 1
+    # note_pong stamps time.monotonic() (the REAL clock), while the
+    # 1000.0/1030.0/1041.0 values above are injected fake times for
+    # check_heartbeats — never compare the two domains. CI run #5 failed
+    # here because a fresh runner's monotonic clock was only ~849 s when
+    # this test ran (assert 849.548172748 > 1030.0); run #3 passed only
+    # because that runner had been alive > 1030 s by then. Assert the
+    # stamp is "now" in the real clock's own domain instead.
+    before = time.monotonic()
     hub.note_pong(fresh)
-    assert fresh.last_pong > 1030.0
+    assert before <= fresh.last_pong <= time.monotonic()
 
 
 # ---------------------------------------------------------------------- #

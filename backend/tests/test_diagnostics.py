@@ -224,6 +224,18 @@ def test_preview_bytes_identical_to_share_bytes(client, monkeypatch):
         "_collect_log_lines",
         lambda settings, limit: ["fixed diagnostics line"],
     )
+    # Disk free space is the third volatile input: _probe_disk reads live
+    # shutil.disk_usage() on every build, and any write to the volume
+    # between the share and preview builds (runner logs, sqlite WAL, app
+    # logs) flips disk_free_bytes by a digit — CI run #5 failed exactly
+    # this way (At index 882 diff, single digit). Freeze it like the
+    # other two volatile inputs above; the route-identity assertion
+    # (preview == share bytes) stays byte-exact.
+    monkeypatch.setattr(
+        diagnostics,
+        "_probe_disk",
+        lambda data_dir: {"free_bytes": 123456789, "total_bytes": 987654321},
+    )
     share = client.get("/api/v1/diagnostics")
     preview = client.get("/api/v1/diagnostics/preview")
     again = client.get("/api/v1/diagnostics")
