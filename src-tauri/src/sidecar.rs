@@ -579,7 +579,7 @@ fn write_pid_file(data_dir: &Path, pid: u32, boot_id: &str) {
         };
         std::env::current_exe()
             .ok()
-            .and_then(|p| p.parent().map(|dir| dir.join(exe_name)))
+            .and_then(|p| p.parent().map(|dir| dir.join(&exe_name)))
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or(exe_name)
     });

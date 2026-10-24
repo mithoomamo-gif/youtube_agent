@@ -190,10 +190,57 @@ class Sidecar:
                 continue
             if isinstance(data, dict) and data.get("event") == "listening":
                 self.port = int(data["port"])
+                # The listening line is printed from a Starlette lifespan
+                # (startup) handler, which uvicorn runs BEFORE it binds the
+                # listening socket and starts accepting connections
+                # (uvicorn 0.54 Server.startup: `await
+                # self.lifespan.startup()` precedes `loop.create_server(...)`
+                # by ~6 ms — measured). The line is therefore an identity
+                # handshake, not a readiness signal: a first request fired
+                # immediately after it can land in the gap and be refused
+                # (observed in CI run #4). Poll /health/live until the
+                # socket actually serves, exactly like the shared helper in
+                # tests/integration/conftest.py::wait_ready.
+                self._await_http_ready()
                 return
         raise AssertionError(
             f"sidecar did not print the listening line within "
             f"{BOOT_TIMEOUT_S}s; output tail: {self.output[-30:]}"
+        )
+
+    def _await_http_ready(self, timeout_s: float = 15.0) -> None:
+        """Poll GET /health/live until the sidecar actually serves HTTP.
+
+        Bounded; fails loud if the process dies mid-wait or the budget
+        expires — never silently passes.
+        """
+        import httpx
+
+        assert self.port is not None
+        deadline = time.monotonic() + timeout_s
+        last_error: Optional[BaseException] = None
+        with httpx.Client(timeout=2.0, trust_env=False) as http:
+            while time.monotonic() < deadline:
+                if self.proc is not None and self.proc.poll() is not None:
+                    raise AssertionError(
+                        "sidecar exited after the listening line but before "
+                        f"serving HTTP (rc={self.proc.returncode}); "
+                        f"output tail: {self.output[-30:]}"
+                    )
+                try:
+                    resp = http.get(f"http://127.0.0.1:{self.port}/health/live")
+                    if resp.status_code == 200 and resp.json().get("status") == "ok":
+                        return
+                    last_error = AssertionError(
+                        f"unexpected /health/live status {resp.status_code}"
+                    )
+                except Exception as exc:  # noqa: BLE001 — refused until uvicorn binds
+                    last_error = exc
+                time.sleep(0.1)
+        raise AssertionError(
+            f"sidecar never served /health/live within {timeout_s:.0f}s "
+            f"after the listening line; last error: {last_error!r}; "
+            f"output tail: {self.output[-30:]}"
         )
 
     def _pump(self) -> None:
