@@ -58,9 +58,109 @@ CONNECT_SCOPES: tuple[str, ...] = (SCOPE_UPLOAD, SCOPE_YOUTUBE)
 
 DEFAULT_CALLBACK_TIMEOUT = 180.0
 
-_SUCCESS_HTML = (
-    b"<html><head><title>Connected</title></head><body>"
-    b"<h1>Connected - you can close this tab.</h1></body></html>"
+_PAGE_CSS = """
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center;
+         justify-content: center; background: #0a0c11; color: #e8eaf0;
+         font-family: "Segoe UI", system-ui, -apple-system, sans-serif; }
+  .card { background: #12151d; border: 1px solid #232836; border-radius: 16px;
+          box-shadow: 0 18px 50px rgba(0,0,0,.5); padding: 38px 42px;
+          max-width: 430px; width: calc(100% - 48px); text-align: center; }
+  .brand { display: flex; align-items: center; justify-content: center;
+           gap: 10px; font-size: 16px; font-weight: 600; }
+  .logo { width: 30px; height: 30px; border-radius: 8px; flex: none;
+          background: linear-gradient(135deg, #7c5cff, #b04dff);
+          display: flex; align-items: center; justify-content: center; }
+  .badge { width: 58px; height: 58px; border-radius: 50%; margin: 26px auto 0;
+           display: flex; align-items: center; justify-content: center; }
+  .badge.ok { background: rgba(46, 204, 113, .12); }
+  .badge.err { background: rgba(255, 107, 107, .12); }
+  h1 { font-size: 20px; margin: 18px 0 8px; font-weight: 600; }
+  p { color: #9aa3b5; font-size: 14px; line-height: 1.55; margin: 0; }
+  button { margin-top: 24px; background: #7c5cff; color: #fff; border: 0;
+           border-radius: 10px; padding: 10px 20px; font-size: 14px;
+           font-weight: 600; cursor: pointer; }
+  button:hover { background: #8d6dff; }
+  .foot { margin-top: 20px; font-size: 12px; color: #5c6475; }
+"""
+
+_LOGO_SVG = (
+    '<span class="logo"><svg width="14" height="14" viewBox="0 0 24 24">'
+    '<path d="M8 5v14l11-7z" fill="#fff"/></svg></span>'
+)
+_OK_SVG = (
+    '<div class="badge ok"><svg width="28" height="28" viewBox="0 0 24 24" '
+    'fill="none"><path d="M4 12.5l5 5L20 6.5" stroke="#2ecc71" '
+    'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'
+    "</svg></div>"
+)
+_ERR_SVG = (
+    '<div class="badge err"><svg width="26" height="26" viewBox="0 0 24 24" '
+    'fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="#ff6b6b" '
+    'stroke-width="2.5" stroke-linecap="round"/></svg></div>'
+)
+
+
+def _callback_page(*, ok: bool, title: str, heading: str, message: str) -> bytes:
+    """The page the browser lands on after Google sign-in.
+
+    Fully self-contained (no external assets — it is served by the
+    loopback listener on the user's own PC) and styled to match the
+    app, because this page is part of the product's first impression.
+    """
+    html = (
+        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{title}</title><style>{_PAGE_CSS}</style></head><body>"
+        "<main class=\"card\">"
+        f"<div class=\"brand\">{_LOGO_SVG}<span>YouTube Agent</span></div>"
+        f"{_OK_SVG if ok else _ERR_SVG}"
+        f"<h1>{heading}</h1><p>{message}</p>"
+        "<button type=\"button\" onclick=\"window.close()\">Close this tab</button>"
+        "<div class=\"foot\">This page is served locally by YouTube Agent "
+        "on your PC.</div>"
+        "</main></body></html>"
+    )
+    return html.encode("utf-8")
+
+
+_SUCCESS_HTML = _callback_page(
+    ok=True,
+    title="Connected · YouTube Agent",
+    heading="Channel connected",
+    message=(
+        "Your YouTube channel is now linked to YouTube Agent. "
+        "You can close this tab and return to the app — everything "
+        "else happens there."
+    ),
+)
+_DENIED_HTML = _callback_page(
+    ok=False,
+    title="Not connected · YouTube Agent",
+    heading="Authorization denied",
+    message=(
+        "No channel was connected. You can close this tab and start "
+        "the connection again from the app whenever you're ready."
+    ),
+)
+_STATE_MISMATCH_HTML = _callback_page(
+    ok=False,
+    title="Not connected · YouTube Agent",
+    heading="Sign-in check failed",
+    message=(
+        "This sign-in didn't match the one the app started, so no "
+        "channel was connected. Close this tab and start the "
+        "connection again from the app."
+    ),
+)
+_MISSING_CODE_HTML = _callback_page(
+    ok=False,
+    title="Not connected · YouTube Agent",
+    heading="Sign-in incomplete",
+    message=(
+        "Google didn't return a sign-in code, so no channel was "
+        "connected. Close this tab and try again from the app."
+    ),
 )
 
 
@@ -261,7 +361,7 @@ class LoopbackReceiver:
 
             def _reply(status: int, body: bytes) -> None:
                 writer.write(
-                    f"HTTP/1.1 {status}\r\nContent-Type: text/html\r\n"
+                    f"HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\n"
                     f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
                     + body
                 )
@@ -270,19 +370,19 @@ class LoopbackReceiver:
             if fut is not None and not fut.done():
                 error = _first(query, "error")
                 if error:
-                    _reply(400, b"<h1>Authorization denied.</h1>")
+                    _reply(400, _DENIED_HTML)
                     fut.set_exception(
                         OAuthDenied(f"authorization denied: {error}")
                     )
                 elif _first(query, "state") != self._expected_state:
-                    _reply(400, b"<h1>State mismatch.</h1>")
+                    _reply(400, _STATE_MISMATCH_HTML)
                     fut.set_exception(
                         StateMismatch("OAuth callback state does not match")
                     )
                 else:
                     code = _first(query, "code")
                     if not code:
-                        _reply(400, b"<h1>Missing code.</h1>")
+                        _reply(400, _MISSING_CODE_HTML)
                         fut.set_exception(OAuthError("callback carried no code"))
                     else:
                         _reply(200, _SUCCESS_HTML)
