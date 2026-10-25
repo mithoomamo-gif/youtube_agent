@@ -25,6 +25,7 @@ import {
   useDisconnectChannel,
   useNicheNames,
   useRevalidateChannel,
+  useSaveOAuthClient,
 } from "../api/queries/channels";
 import type { ChannelWire } from "../api/queries/channels";
 import {
@@ -1012,6 +1013,107 @@ function StyleLabSection({
   );
 }
 
+/**
+ * Save the app's own YouTube (Google Cloud) OAuth client credentials
+ * into the credential store (PUT /channels/oauth-client). Shown inside
+ * the `youtube_client_not_configured` setup panel. The client secret
+ * is a password field, is never prefilled, and is cleared on save —
+ * the backend stores it write-only and never returns it.
+ */
+function OAuthClientForm() {
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const saveOAuthClient = useSaveOAuthClient();
+
+  const canSave =
+    clientId.trim() !== "" &&
+    clientSecret.trim() !== "" &&
+    !saveOAuthClient.isPending;
+
+  const handleSave = () => {
+    if (!canSave) return;
+    setFormError(null);
+    saveOAuthClient.mutate(
+      {
+        client_id: clientId.trim(),
+        client_secret: clientSecret.trim(),
+      },
+      {
+        onSuccess: () => {
+          setClientId("");
+          setClientSecret("");
+          setSaved(true);
+        },
+        onError: (err) => {
+          setSaved(false);
+          setFormError(
+            `Couldn't save the client credentials: ${errorText(err)}`,
+          );
+        },
+      },
+    );
+  };
+
+  return (
+    <div className="mt-4 rounded-md border border-line bg-raised/50 p-4">
+      <h3 className="text-sm font-semibold text-ink">
+        Already have a Google Cloud OAuth client? Save it here
+      </h3>
+      <p className="mt-1 text-xs leading-relaxed text-muted">
+        Paste the Client ID and Client secret of your “Desktop app”
+        OAuth client. They are stored only in this PC's credential
+        store and are never shown again — the secret field stays empty
+        after saving.
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          value={clientId}
+          onChange={(event) => {
+            setClientId(event.target.value);
+            setSaved(false);
+          }}
+          placeholder="Client ID"
+          aria-label="YouTube OAuth Client ID"
+          autoComplete="off"
+          className="w-72 rounded-md border border-line bg-raised px-3 py-2 font-mono text-sm text-ink"
+        />
+        <input
+          type="password"
+          value={clientSecret}
+          onChange={(event) => {
+            setClientSecret(event.target.value);
+            setSaved(false);
+          }}
+          placeholder="Client secret"
+          aria-label="YouTube OAuth Client secret"
+          autoComplete="off"
+          className="w-64 rounded-md border border-line bg-raised px-3 py-2 font-mono text-sm text-ink"
+        />
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={!canSave}
+          onClick={handleSave}
+        >
+          {saveOAuthClient.isPending ? "Saving…" : "Save credentials"}
+        </Button>
+      </div>
+      {formError ? (
+        <p className="mt-2 text-sm text-danger">{formError}</p>
+      ) : null}
+      {saved ? (
+        <p className="mt-2 text-sm text-ok">
+          Saved — YouTube sign-in is now configured. Press “Connect
+          channel” above to sign in with your channel's Google account.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export default function Channels() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -1172,6 +1274,7 @@ export default function Channels() {
                 credentials yet, so there is nothing to sign in with.{" "}
                 {setupPanel.message}
               </p>
+              <OAuthClientForm />
               {setupPanel.steps.length > 0 ? (
                 <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-sm leading-relaxed text-ink2">
                   {setupPanel.steps.map((step, index) => (

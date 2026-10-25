@@ -83,7 +83,35 @@ const NAV_ITEMS: NavItem[] = [
   { label: "About", icon: Info },
 ];
 
-const ACTIVE_NAV = "API Keys & Providers";
+/** Header subtitle per settings section. */
+const SECTION_DESCRIPTIONS: Record<string, string> = {
+  General: "App updates and starting with Windows.",
+  "Channels & YouTube":
+    "The YouTube API compliance gate that controls public publishing.",
+  "API Keys & Providers":
+    "Connect the services the agents use. The kill switch is always available in the app header.",
+  "Models & Defaults": "Model choices and generation defaults.",
+  "Voice & Audio": "Voiceover and audio settings.",
+  "Stock & Images": "Stock media and image settings.",
+  "Automation & Guardrails":
+    "Budget caps and the guardrails that bound what automation may do.",
+  "Rendering & Performance": "Rendering and performance settings.",
+  Notifications: "Notification preferences.",
+  "Data & Privacy":
+    "Backups, restore, and what happens to your data on uninstall.",
+  Advanced: "Advanced settings.",
+  About: "About this YouTube Agent install.",
+};
+
+/** Nav sections that have no settings in this version yet. */
+const EMPTY_NAV_ITEMS: string[] = [
+  "Models & Defaults",
+  "Voice & Audio",
+  "Stock & Images",
+  "Rendering & Performance",
+  "Notifications",
+  "Advanced",
+];
 
 /**
  * Display metadata is presentation-only and keyed by the backend's
@@ -1641,7 +1669,58 @@ function AutostartCard() {
   );
 }
 
+/** Honest placeholder for nav sections with no settings yet. */
+function EmptySectionCard() {
+  return (
+    <Card className="p-5">
+      <p className="text-sm text-muted">
+        Nothing here yet — this section has no settings in this version.
+      </p>
+    </Card>
+  );
+}
+
+// ── About: this install's version (shell version, backend fallback) ───────
+
+function AboutCard() {
+  const shellVersion = useUpdaterStore((s) => s.currentVersion);
+  const backendAppVersion = useBackendBootstrapStore(
+    (s) => s.systemInfo?.appVersion ?? null,
+  );
+
+  useEffect(() => {
+    void loadCurrentVersion();
+  }, []);
+
+  const displayVersion = shellVersion ?? backendAppVersion;
+
+  return (
+    <Card className="p-5">
+      <h2 className="text-base font-semibold text-ink">YouTube Agent</h2>
+      <p className="mt-1 text-sm text-ink2">
+        The desktop app that plans, produces and publishes your YouTube
+        videos with its agent team, on this PC.
+      </p>
+      <div className="flex items-center justify-between gap-4 py-3">
+        <div>
+          <p className="text-sm font-medium text-ink">Current version</p>
+          <p className="mt-0.5 text-xs text-muted">
+            The version of YouTube Agent running on this PC.
+          </p>
+        </div>
+        <span className="font-mono text-sm text-ink tnum">
+          {displayVersion ? `v${displayVersion}` : "Unavailable in this build"}
+        </span>
+      </div>
+      <p className="text-xs text-muted">
+        Update checks and installs live under General → Updates.
+      </p>
+    </Card>
+  );
+}
+
 export default function Settings() {
+  const [activeNav, setActiveNav] = useState<string>("API Keys & Providers");
   const providersQuery = useProviders();
   const budgetQuery = useBudgetSettings();
   const updateBudget = useUpdateBudgetSettings();
@@ -1713,11 +1792,12 @@ export default function Settings() {
         <ul className="space-y-1">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
-            const active = item.label === ACTIVE_NAV;
+            const active = item.label === activeNav;
             return (
               <li key={item.label}>
                 <button
                   type="button"
+                  onClick={() => setActiveNav(item.label)}
                   aria-current={active ? "page" : undefined}
                   className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm ${
                     active
@@ -1736,15 +1816,14 @@ export default function Settings() {
 
       <div className="min-w-0 flex-1 p-6">
         <header className="mb-6">
-          <h1 className="text-2xl font-semibold text-ink">
-            API Keys &amp; Providers
-          </h1>
+          <h1 className="text-2xl font-semibold text-ink">{activeNav}</h1>
           <p className="mt-1 text-sm text-muted">
-            Connect the services the agents use. The kill switch is always
-            available in the app header.
+            {SECTION_DESCRIPTIONS[activeNav] ?? ""}
           </p>
         </header>
 
+        {activeNav === "API Keys & Providers" && (
+          <>
         <Card className="mb-6 border-accent/40 bg-raised p-5">
           <p className="text-sm text-ink">
             Keys are stored only on this PC in Windows Credential Manager —
@@ -1797,7 +1876,11 @@ export default function Settings() {
             <ProviderGroup title="Optional" providers={optional} />
           </div>
         )}
+          </>
+        )}
 
+        {activeNav === "Automation & Guardrails" && (
+          <>
         <Card className="mt-6 p-5">
           <h2 className="text-base font-semibold text-ink">
             Budgets &amp; Guardrails
@@ -1990,16 +2073,28 @@ export default function Settings() {
             </div>
           </div>
         </Card>
+          </>
+        )}
 
-        <BackupRestoreCard />
+        {activeNav === "Data & Privacy" && (
+          <>
+            <BackupRestoreCard />
+            <DataPrivacyCard />
+          </>
+        )}
 
-        <DataPrivacyCard />
+        {activeNav === "Channels & YouTube" && <ComplianceCard />}
 
-        <ComplianceCard />
+        {activeNav === "General" && (
+          <>
+            <UpdatesCard />
+            <AutostartCard />
+          </>
+        )}
 
-        <UpdatesCard />
+        {activeNav === "About" && <AboutCard />}
 
-        <AutostartCard />
+        {EMPTY_NAV_ITEMS.includes(activeNav) && <EmptySectionCard />}
 
         <div className="mt-6 flex items-center justify-end gap-3 border-t border-line pt-4">
           <span className="text-sm text-muted">

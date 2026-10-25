@@ -334,6 +334,61 @@ export function useConnectFlowStatus(flowId: string | null) {
   });
 }
 
+/**
+ * `GET /channels/oauth-client` -> `{ client_configured }` — whether the
+ * app's own YouTube (Google Cloud) OAuth client credentials have been
+ * saved into the credential store. Boolean only: the stored client
+ * secret is write-only and is never returned.
+ */
+export interface OAuthClientStatus {
+  client_configured: boolean;
+}
+
+export function useOAuthClientStatus() {
+  return useQuery({
+    queryKey: ["channels", "oauth-client"],
+    queryFn: async (): Promise<OAuthClientStatus> => {
+      const raw = await request<unknown>("GET", "/channels/oauth-client");
+      return {
+        client_configured:
+          isRecord(raw) && raw.client_configured === true,
+      };
+    },
+    retry: 1,
+  });
+}
+
+/**
+ * `PUT /channels/oauth-client` `{ client_id, client_secret }` ->
+ * `{ client_configured: true }`. Saves the app's YouTube OAuth client
+ * credentials into the credential store (write-only). On success the
+ * channels and onboarding queries are invalidated so the
+ * `youtube_client_not_configured` setup panel and the onboarding
+ * YouTube status refresh.
+ */
+export function useSaveOAuthClient() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: {
+      client_id: string;
+      client_secret: string;
+    }): Promise<OAuthClientStatus> => {
+      const raw = await request<unknown>("PUT", "/channels/oauth-client", {
+        client_id: vars.client_id,
+        client_secret: vars.client_secret,
+      });
+      return {
+        client_configured:
+          isRecord(raw) && raw.client_configured === true,
+      };
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["channels"] });
+      void queryClient.invalidateQueries({ queryKey: ["onboarding"] });
+    },
+  });
+}
+
 /** POST /channels/{id}/revalidate — stub on the backend (returns ok). */
 export function useRevalidateChannel() {
   const queryClient = useQueryClient();

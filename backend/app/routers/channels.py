@@ -36,6 +36,19 @@ listener on 127.0.0.1, ``access_type=offline`` + ``prompt=consent``):
    ``needs_audit_check``: the YouTube API compliance-audit status is
    UNKNOWN at connect time and is never claimed as passed here.
 
+OAuth client management
+------------------------
+``PUT /api/v1/channels/oauth-client`` is the ONE write path for the
+client pair above: the shipped app's Settings/Channels UI collects the
+Desktop-app ``client_id`` / ``client_secret`` there and they are stored
+ONLY through the secret store at the refs named above. The endpoint is
+write-only in the providers-router sense — no response from this
+router ever contains either value, at most ``{"client_configured":
+bool}``. ``GET`` on the same path reports that status (true only when
+BOTH refs hold non-blank values); ``DELETE`` removes both refs so a
+wrong pair can be cleared before re-entry. Blank values are a 422
+``validation_error`` (the providers ``PUT /{id}/key`` convention).
+
 Connect-state storage: the ``channels.status`` column is the lifecycle
 status (its CHECK constraint allows active/paused/disconnected/at_risk),
 so a freshly connected channel is ``paused`` there, while the connect /
@@ -219,6 +232,19 @@ class ConnectRequest(BaseModel):
     channel_id: Optional[str] = None
     login_hint: Optional[str] = None
     open_browser: bool = True
+
+
+class OAuthClientBody(BaseModel):
+    """The Google OAuth *client* pair (Desktop app), write-only.
+
+    Both fields are optional in the model ONLY so a missing/blank value
+    surfaces as the app's standard 422 ``validation_error`` envelope
+    (providers-router convention) instead of a bare framework error;
+    the endpoint itself requires both, non-blank after trimming.
+    """
+
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +618,18 @@ def _client_credentials(store) -> tuple[str, str]:
     return str(client_id).strip(), str(client_secret).strip()
 
 
+def _client_configured(store) -> bool:
+    """True only when BOTH client refs hold non-blank values."""
+    client_id = store.get(CLIENT_ID_REF)
+    client_secret = store.get(CLIENT_SECRET_REF)
+    return bool(
+        client_id
+        and str(client_id).strip()
+        and client_secret
+        and str(client_secret).strip()
+    )
+
+
 def _emit_channel_updated(app: Any, payload: dict) -> None:
     """Best-effort ``channel.updated`` event via the shared WS hub."""
     try:
@@ -787,6 +825,68 @@ async def _complete_connect_flow(
 async def list_channels() -> dict:
     items = _list_channels()
     return {"items": items, "next_cursor": None}
+
+
+# NOTE: the oauth-client routes are registered BEFORE the
+# ``/{channel_id}`` routes below so DELETE /oauth-client is not
+# swallowed by DELETE /{channel_id}.
+
+
+@router.put("/oauth-client")
+async def put_oauth_client(request: Request, payload: OAuthClientBody) -> dict:
+    """Store the Google OAuth client pair in the secret store.
+
+    Write-only: the values go ONLY to the secret store (refs
+    ``youtube/client_id`` / ``youtube/client_secret``) and the response
+    carries just the configured status — the pair is never echoed, in
+    whole or in part (not even a last-4: a client_secret has no safe
+    display hint). Re-PUTting replaces the pair, which is how a stale
+    or mistyped client is corrected. Like the providers key PUT this is
+    a plain idempotent settings write — no Idempotency-Key is required
+    (that convention covers work-creating POSTs).
+    """
+    client_id = (payload.client_id or "").strip()
+    if not client_id:
+        raise ApiError(
+            422,
+            "validation_error",
+            "client_id must not be empty.",
+            details={"field": "client_id"},
+        )
+    client_secret = (payload.client_secret or "").strip()
+    if not client_secret:
+        raise ApiError(
+            422,
+            "validation_error",
+            "client_secret must not be empty.",
+            details={"field": "client_secret"},
+        )
+    store = _secret_store(request)
+    # Raises ApiError 503 credential_store_unavailable on backend failure.
+    store.put(CLIENT_ID_REF, client_id)
+    store.put(CLIENT_SECRET_REF, client_secret)
+    return {"client_configured": True}
+
+
+@router.get("/oauth-client")
+async def get_oauth_client(request: Request) -> dict:
+    """Configured status of the OAuth client pair (never the values)."""
+    store = _secret_store(request)
+    return {"client_configured": _client_configured(store)}
+
+
+@router.delete("/oauth-client")
+async def delete_oauth_client(request: Request) -> dict:
+    """Remove BOTH OAuth client refs from the secret store.
+
+    Deleting when nothing is stored is a graceful no-op (the secret
+    store's delete already tolerates a missing ref), so the UI can
+    offer "remove" unconditionally before re-entry.
+    """
+    store = _secret_store(request)
+    store.delete(CLIENT_ID_REF)
+    store.delete(CLIENT_SECRET_REF)
+    return {"client_configured": False}
 
 
 @router.patch("/{channel_id}")
