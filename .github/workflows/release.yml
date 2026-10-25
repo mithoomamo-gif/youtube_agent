@@ -1091,6 +1091,11 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job's working directory is NOT inside the git checkout
+          # (source lives in ./source), so gh cannot infer the repo from
+          # git and dies with "failed to run git: not a git repository"
+          # (v0.1.6 release run 40145849851). GH_REPO pins it explicitly.
+          GH_REPO: ${{ github.repository }}
           RELEASE_VERSION: ${{ needs.build.outputs.version }}
         run: |
           $ErrorActionPreference = "Stop"
