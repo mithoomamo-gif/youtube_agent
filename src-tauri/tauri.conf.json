@@ -37,7 +37,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "binaries/agent-backend/": "agent-backend/"
+      "binaries/agent-backend/": "agent-backend/",
+      "binaries/ffmpeg/": "runtime/"
     },
     "targets": [
       "nsis"
