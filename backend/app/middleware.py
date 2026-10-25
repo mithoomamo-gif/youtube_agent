@@ -50,7 +50,17 @@ from app.errors import error_response
 
 EXEMPT_PATHS = frozenset({"/health/live"})
 ALLOWED_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
-ALLOWED_ORIGINS = frozenset({"https://tauri.localhost", "tauri://localhost"})
+ALLOWED_ORIGINS = frozenset(
+    {
+        # Tauri 2 on Windows hosts the frontend on http://tauri.localhost
+        # BY DEFAULT (v1 used https); useHttpsScheme is opt-in and this
+        # app does not set it — patch v15 (the v14 allowlist named only
+        # the v1 https origin, so the real webview was still rejected).
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
+    }
+)
 STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 TOKEN_HEADER = "x-local-token"

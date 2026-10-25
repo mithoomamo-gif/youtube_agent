@@ -273,3 +273,43 @@ def test_no_origin_means_no_acao(client):
     resp = client.get("/health/live")
     assert resp.status_code == 200
     assert "access-control-allow-origin" not in resp.headers
+
+
+# -- CORS, patch v15: the REAL Tauri 2 Windows origin --------------------
+# Tauri 2 changed the Windows webview origin to http://tauri.localhost
+# (https only when app.windows.useHttpsScheme=true, which this app does
+# not set). v14 allowlisted only the v1 https origin, so on the user's
+# clean v0.1.8 install the webview's preflight still met a 403
+# origin_not_allowed with no CORS headers and every UI fetch aborted —
+# "Backend offline" again, while the shell's native client (footer:
+# "Engine running · 12 agents active") talked to the backend fine.
+
+TAURI_ORIGIN_HTTP = "http://tauri.localhost"
+
+
+def test_preflight_from_tauri_http_origin_needs_no_token(client):
+    resp = client.options(
+        "/health/ready",
+        headers={
+            "Origin": TAURI_ORIGIN_HTTP,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "x-local-token, authorization",
+        },
+    )
+    assert resp.status_code == 204
+    assert resp.headers["access-control-allow-origin"] == TAURI_ORIGIN_HTTP
+    assert resp.headers["access-control-allow-private-network"] == "true"
+
+
+def test_ready_with_token_and_tauri_http_origin_carries_acao(client):
+    resp = client.get(
+        "/health/ready", headers={**AUTH, "Origin": TAURI_ORIGIN_HTTP}
+    )
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == TAURI_ORIGIN_HTTP
+
+
+def test_rejection_with_tauri_http_origin_still_carries_acao(client):
+    resp = client.get("/health/ready", headers={"Origin": TAURI_ORIGIN_HTTP})
+    assert resp.status_code == 401
+    assert resp.headers["access-control-allow-origin"] == TAURI_ORIGIN_HTTP
