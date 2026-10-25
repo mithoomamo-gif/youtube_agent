@@ -28,6 +28,7 @@ import {
   useSaveOAuthClient,
 } from "../api/queries/channels";
 import type { ChannelWire } from "../api/queries/channels";
+import { useChannelSelectionStore } from "../state/channelSelection";
 import {
   useActivateStyleProfile,
   useArchiveCompetitor,
@@ -1120,7 +1121,12 @@ export default function Channels() {
   const [setupPanel, setSetupPanel] = useState<SetupPanelState | null>(null);
   const [flowPending, setFlowPending] = useState(false);
   const [flowId, setFlowId] = useState<string | null>(null);
-  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
+  const selectedChannelId = useChannelSelectionStore(
+    (s) => s.selectedChannelId,
+  );
+  const setSelectedChannelId = useChannelSelectionStore(
+    (s) => s.setSelectedChannelId,
+  );
 
   const channelsQuery = useChannels();
   const nicheNamesQuery = useNicheNames();

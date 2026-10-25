@@ -11,6 +11,9 @@ import {
   MonitorPlay,
 } from "lucide-react";
 
+import { useChannels } from "../../api/queries/channels";
+import { useChannelSelectionStore } from "../../state/channelSelection";
+
 const HOLD_DURATION_MS = 600;
 const HOLD_TICK_MS = 20;
 
@@ -31,6 +34,79 @@ async function runWindowAction(action: WindowAction) {
   } catch {
     // Not running inside Tauri (e.g. `vite dev` in a browser) — no-op.
   }
+}
+
+function ChannelSwitcher() {
+  const channelsQuery = useChannels();
+  const channels = channelsQuery.data ?? [];
+  const selectedChannelId = useChannelSelectionStore(
+    (s) => s.selectedChannelId,
+  );
+  const setSelectedChannelId = useChannelSelectionStore(
+    (s) => s.setSelectedChannelId,
+  );
+  const [open, setOpen] = useState(false);
+
+  const current =
+    channels.find((c) => c.id === selectedChannelId) ?? channels[0] ?? null;
+
+  const label = channelsQuery.isLoading
+    ? "Channel: …"
+    : current
+      ? `Channel: ${current.title ?? current.handle ?? "Untitled channel"}`
+      : "No channel connected";
+
+  const canSwitch = channels.length > 1;
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => canSwitch && setOpen((v) => !v)}
+        className="flex items-center gap-2 rounded-full border border-line bg-raised px-3 py-1 text-sm text-ink transition hover:text-ink"
+      >
+        <MonitorPlay className="h-4 w-4 shrink-0 text-danger" />
+        <span className="whitespace-nowrap">{label}</span>
+        {canSwitch && <ChevronDown className="h-3.5 w-3.5 text-muted" />}
+      </button>
+      {open && canSwitch && (
+        <>
+          <button
+            type="button"
+            aria-hidden
+            tabIndex={-1}
+            className="fixed inset-0 z-10 cursor-default"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute left-0 top-full z-20 mt-2 w-72 overflow-hidden rounded-xl border border-line bg-panel shadow-xl">
+            {channels.map((channel) => (
+              <button
+                key={channel.id}
+                type="button"
+                onClick={() => {
+                  setSelectedChannelId(channel.id);
+                  setOpen(false);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-ink transition hover:bg-raised"
+              >
+                <span className="flex-1 truncate">
+                  {channel.title ?? channel.handle ?? "Untitled channel"}
+                </span>
+                {channel.status && (
+                  <span className="text-[11px] text-muted">
+                    {channel.status}
+                  </span>
+                )}
+                {current?.id === channel.id && (
+                  <Check className="h-3.5 w-3.5 shrink-0 text-accent2" />
+                )}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 export function TitleBar() {
@@ -88,15 +164,9 @@ export function TitleBar() {
         <span className="font-semibold text-ink">YouTube Agent</span>
       </div>
 
-      {/* Channel switcher (placeholder) */}
-      <button
-        type="button"
-        className="flex items-center gap-2 rounded-full border border-line bg-raised px-3 py-1 text-sm text-ink transition hover:text-ink"
-      >
-        <MonitorPlay className="h-4 w-4 shrink-0 text-danger" />
-        <span className="whitespace-nowrap">Channel: TechExplained Hindi</span>
-        <ChevronDown className="h-3.5 w-3.5 text-muted" />
-      </button>
+      {/* Channel switcher — real: shows the selected channel (or the
+          first one) and switches the app-wide selection. */}
+      <ChannelSwitcher />
 
       {/* Autonomy dial (placeholder) */}
       <div className="hidden items-center gap-2 md:flex" data-tauri-drag-region>
