@@ -63,6 +63,26 @@ def test_load_settings_detached_false_values() -> None:
         assert settings.detached is False
 
 
+def test_load_settings_allow_dev_origins() -> None:
+    # Default (unset) is off — the shipped sidecar never sets the env.
+    settings = load_settings(env={"YTA_TOKEN": "tok-12345678"})
+    assert settings.allow_dev_origins is False
+    for raw in ("1", "true"):
+        settings = load_settings(
+            env={"YTA_TOKEN": "tok-12345678", "YTA_ALLOW_DEV_ORIGINS": raw}
+        )
+        assert settings.allow_dev_origins is True
+    for raw in ("0", "false", ""):
+        settings = load_settings(
+            env={"YTA_TOKEN": "tok-12345678", "YTA_ALLOW_DEV_ORIGINS": raw}
+        )
+        assert settings.allow_dev_origins is False
+    with pytest.raises(ValueError, match="YTA_ALLOW_DEV_ORIGINS"):
+        load_settings(
+            env={"YTA_TOKEN": "tok-12345678", "YTA_ALLOW_DEV_ORIGINS": "maybe"}
+        )
+
+
 def test_load_settings_missing_token_raises() -> None:
     with pytest.raises(ValueError, match="YTA_TOKEN"):
         load_settings(env={})

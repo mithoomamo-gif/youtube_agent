@@ -206,6 +206,7 @@ function Invoke-Backend {
     if (-not $env:YTA_BOOT_ID) { $env:YTA_BOOT_ID = [guid]::NewGuid().ToString() }
     if (-not $env:YTA_DATA_DIR) { $env:YTA_DATA_DIR = Join-Path $RepoRoot "backend\.dev-data" }
     if (-not $env:YTA_DETACHED) { $env:YTA_DETACHED = "1" }
+    if (-not $env:YTA_ALLOW_DEV_ORIGINS) { $env:YTA_ALLOW_DEV_ORIGINS = "1" }
     if (-not $env:YTA_LOG_LEVEL) { $env:YTA_LOG_LEVEL = "debug" }
 
     Info "Starting backend: (backend/) $pyExe -m app.main  [127.0.0.1:$env:YTA_PORT, YTA_DATA_DIR=$env:YTA_DATA_DIR; no --reload — restart manually]"

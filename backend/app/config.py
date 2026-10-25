@@ -17,6 +17,12 @@ Variable       Meaning
 ``YTA_PARENT_PID`` Shell PID for the parent watchdog (None = no watchdog)
 ``YTA_LOG_LEVEL`` Default ``info``
 ``YTA_DETACHED`` 1 only for Task-Scheduler headless runs (no watchdog)
+``YTA_ALLOW_DEV_ORIGINS`` 1/true only for local dev runs (set by
+               ``tools/dev.ps1``): also allow the Vite dev UI origins
+               ``http://localhost:1420`` / ``http://127.0.0.1:1420`` in
+               the Origin/CORS guard. Unset/off everywhere else — the
+               shipped sidecar never sets it, so its allowlist stays
+               exactly the Tauri webview origins.
 ============== ============================================================
 """
 
@@ -85,6 +91,7 @@ class Settings:
     parent_pid: int | None = None
     log_level: str = "info"
     detached: bool = False
+    allow_dev_origins: bool = False
 
     # -- derived paths -----------------------------------------------------
     @property
@@ -148,6 +155,9 @@ def load_settings(env: Mapping[str, str] | None = None, *, require_token: bool =
         parent_pid=_parse_optional_int(source.get("YTA_PARENT_PID"), "YTA_PARENT_PID"),
         log_level=(source.get("YTA_LOG_LEVEL") or "info").strip().lower() or "info",
         detached=_parse_bool(source.get("YTA_DETACHED"), "YTA_DETACHED"),
+        allow_dev_origins=_parse_bool(
+            source.get("YTA_ALLOW_DEV_ORIGINS"), "YTA_ALLOW_DEV_ORIGINS"
+        ),
     )
     # Make the launch token an exact-match secret for the redaction choke point.
     register_secret(settings.token)

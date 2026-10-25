@@ -28,6 +28,13 @@ and research 14_security.md / 31_backend_protocol.md:
   blocks every UI->backend response and the app reports "Backend
   offline" on a healthy backend (installer test on a real Windows PC,
   2026-10-25 — patch v14).
+* Dev exception (flag-gated, never on in the shipped app): when the
+  resolved settings carry ``allow_dev_origins`` (env
+  ``YTA_ALLOW_DEV_ORIGINS``, set only by ``tools/dev.ps1`` for the
+  documented browser dev path), the two Vite dev origins
+  (``http://localhost:1420``, ``http://127.0.0.1:1420``) join the
+  allowlist for that process. With the flag off the allowlist is
+  exactly :data:`ALLOWED_ORIGINS`, byte-for-byte as shipped.
 
 WebSocket scope is passed through untouched — BaseHTTPMiddleware only
 intercepts ``http`` scope; WS auth happens via the one-time ticket at
@@ -61,6 +68,18 @@ ALLOWED_ORIGINS = frozenset(
         "tauri://localhost",
     }
 )
+# Vite dev-server origins for the documented browser dev path
+# (``tools/dev.ps1``: backend on 127.0.0.1:8765, UI on port 1420).
+# These are NEVER allowed on their own — they join the allowlist only
+# per-request when the resolved settings have ``allow_dev_origins``
+# on (env ``YTA_ALLOW_DEV_ORIGINS``, which the shipped shell never
+# sets). See _allowed_origins().
+DEV_ORIGINS = frozenset(
+    {
+        "http://localhost:1420",
+        "http://127.0.0.1:1420",
+    }
+)
 STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 TOKEN_HEADER = "x-local-token"
@@ -89,6 +108,20 @@ def _expected_token(request: Request) -> str:
     settings = _resolve_settings(request)
     token = getattr(settings, "token", None) if settings is not None else None
     return token or ""
+
+
+def _allowed_origins(settings) -> frozenset:
+    """Origin allowlist for one request, from its resolved settings.
+
+    The shipped allowlist (:data:`ALLOWED_ORIGINS`) is the default and
+    the only possibility unless the settings explicitly carry
+    ``allow_dev_origins`` — a plain ``getattr`` default of False keeps
+    settings objects that predate the flag (and the shipped shell,
+    which never sets the env) on exactly the old behaviour.
+    """
+    if settings is not None and getattr(settings, "allow_dev_origins", False):
+        return ALLOWED_ORIGINS | DEV_ORIGINS
+    return ALLOWED_ORIGINS
 
 
 def _bearer_token(request: Request) -> Optional[str]:
@@ -177,8 +210,19 @@ class LaunchTokenMiddleware(BaseHTTPMiddleware):
         # The CORS origin is decided once, up front: only an Origin on
         # the allowlist earns CORS headers (and only after it survives
         # check 2 below); anything else gets none, exactly as before.
+        # The allowlist itself is resolved per request from the same
+        # settings source the token check uses (constructor override
+        # wins, else app.state.settings / launch env): it gains the
+        # Vite dev origins ONLY when that settings object carries
+        # allow_dev_origins — otherwise it is ALLOWED_ORIGINS itself.
+        origin_settings = (
+            self._settings_override
+            if self._settings_override is not None
+            else _resolve_settings(request)
+        )
+        allowed_origins = _allowed_origins(origin_settings)
         origin = request.headers.get("origin")
-        cors_origin = origin if origin in ALLOWED_ORIGINS else None
+        cors_origin = origin if origin in allowed_origins else None
 
         def reject(status: int, code: str, message: str, retryable: bool = False):
             resp = error_response(
@@ -201,7 +245,7 @@ class LaunchTokenMiddleware(BaseHTTPMiddleware):
 
         # 2) Origin / Sec-Fetch-Site checks.
         if origin is not None:
-            if origin not in ALLOWED_ORIGINS:
+            if origin not in allowed_origins:
                 return reject(403, "origin_not_allowed", "Origin is not allowed")
         elif request.method in STATE_CHANGING_METHODS:
             # No Origin on a state-changing request is fine for native

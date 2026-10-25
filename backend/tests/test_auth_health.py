@@ -313,3 +313,104 @@ def test_rejection_with_tauri_http_origin_still_carries_acao(client):
     resp = client.get("/health/ready", headers={"Origin": TAURI_ORIGIN_HTTP})
     assert resp.status_code == 401
     assert resp.headers["access-control-allow-origin"] == TAURI_ORIGIN_HTTP
+
+
+# -- CORS, dev origins: Vite dev UI, gated by YTA_ALLOW_DEV_ORIGINS ------
+# The documented dev path (tools/dev.ps1: backend on 127.0.0.1:8765,
+# Vite UI on localhost:1420) runs the UI in a plain browser, whose
+# Origin is neither Tauri origin — so without an allowance the dev UI
+# hit the same "Backend offline" wall as v14/v15 even with both
+# processes up. The dev origins are allowed ONLY when the resolved
+# settings carry allow_dev_origins (env YTA_ALLOW_DEV_ORIGINS, set by
+# tools/dev.ps1's Invoke-Backend); the shipped shell never sets it, so
+# the shipped allowlist is unchanged.
+
+DEV_ORIGINS = ("http://localhost:1420", "http://127.0.0.1:1420")
+
+
+def _settings_with_dev_origins(enabled: bool) -> SimpleNamespace:
+    ns = _settings()
+    ns.allow_dev_origins = enabled
+    return ns
+
+
+def build_app_with_dev_origins(enabled: bool):
+    app = build_app()
+    app.state.settings = _settings_with_dev_origins(enabled)
+    return app
+
+
+@pytest.fixture()
+def dev_client():
+    # Fresh app per test -> fresh in-memory rate-limit state.
+    with TestClient(build_app_with_dev_origins(True), base_url=BASE_URL) as c:
+        yield c
+
+
+@pytest.fixture()
+def shipped_client():
+    # Same app, flag explicitly off — the shipped configuration.
+    with TestClient(build_app_with_dev_origins(False), base_url=BASE_URL) as c:
+        yield c
+
+
+def test_dev_origin_preflight_needs_no_token_when_flag_on(dev_client):
+    for origin in DEV_ORIGINS:
+        resp = dev_client.options(
+            "/health/ready",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "x-local-token, authorization",
+            },
+        )
+        assert resp.status_code == 204
+        assert resp.headers["access-control-allow-origin"] == origin
+        assert resp.headers["access-control-allow-private-network"] == "true"
+
+
+def test_dev_origin_response_carries_acao_when_flag_on(dev_client):
+    for origin in DEV_ORIGINS:
+        resp = dev_client.get(
+            "/health/ready", headers={**AUTH, "Origin": origin}
+        )
+        assert resp.status_code == 200
+        assert resp.headers["access-control-allow-origin"] == origin
+
+
+def test_dev_origin_still_403_without_acao_when_flag_off(shipped_client):
+    for origin in DEV_ORIGINS:
+        resp = shipped_client.options(
+            "/health/ready",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert resp.status_code == 403
+        assert "access-control-allow-origin" not in resp.headers
+        resp = shipped_client.get(
+            "/health/ready", headers={**AUTH, "Origin": origin}
+        )
+        assert resp.status_code == 403
+        assert resp.json()["error"]["code"] == "origin_not_allowed"
+        assert "access-control-allow-origin" not in resp.headers
+
+
+def test_evil_origin_still_rejected_when_flag_on(dev_client):
+    resp = dev_client.options(
+        "/health/ready",
+        headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp.status_code == 403
+    assert "access-control-allow-origin" not in resp.headers
+    resp = dev_client.post(
+        "/health/ready",
+        headers={**AUTH, "Origin": "https://evil.example"},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "origin_not_allowed"
+    assert "access-control-allow-origin" not in resp.headers
