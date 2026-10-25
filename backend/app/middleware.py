@@ -20,7 +20,14 @@ and research 14_security.md / 31_backend_protocol.md:
   ``Sec-Fetch-Site: cross-site`` is present.
 * Bad-token rate limiting: >10 failed token checks inside 60 s turns
   token failures into blanket 429s for 60 s.
-* No permissive CORS is added anywhere.
+* CORS is answered ONLY for the allowlisted Tauri webview origins
+  (never a wildcard): an allowlisted preflight ``OPTIONS`` is answered
+  before the token check (browsers never send the token on a
+  preflight), and every response to an allowlisted ``Origin`` carries
+  ``Access-Control-Allow-Origin``. Without this the WebView2 webview
+  blocks every UI->backend response and the app reports "Backend
+  offline" on a healthy backend (installer test on a real Windows PC,
+  2026-10-25 — patch v14).
 
 WebSocket scope is passed through untouched — BaseHTTPMiddleware only
 intercepts ``http`` scope; WS auth happens via the one-time ticket at
@@ -157,6 +164,12 @@ class LaunchTokenMiddleware(BaseHTTPMiddleware):
         request_id = uuid.uuid4().hex
         request.state.request_id = request_id
 
+        # The CORS origin is decided once, up front: only an Origin on
+        # the allowlist earns CORS headers (and only after it survives
+        # check 2 below); anything else gets none, exactly as before.
+        origin = request.headers.get("origin")
+        cors_origin = origin if origin in ALLOWED_ORIGINS else None
+
         def reject(status: int, code: str, message: str, retryable: bool = False):
             resp = error_response(
                 status_code=status,
@@ -165,6 +178,11 @@ class LaunchTokenMiddleware(BaseHTTPMiddleware):
                 request_id=request_id,
                 retryable=retryable,
             )
+            if cors_origin is not None:
+                # Even a rejection must be READABLE by the webview, or
+                # it surfaces as a network error instead of this body.
+                resp.headers["Access-Control-Allow-Origin"] = cors_origin
+                resp.headers["Vary"] = "Origin"
             return resp
 
         # 1) Host allowlist (applies to every HTTP request, incl. exempt).
@@ -172,7 +190,6 @@ class LaunchTokenMiddleware(BaseHTTPMiddleware):
             return reject(403, "host_not_allowed", "Host is not allowed")
 
         # 2) Origin / Sec-Fetch-Site checks.
-        origin = request.headers.get("origin")
         if origin is not None:
             if origin not in ALLOWED_ORIGINS:
                 return reject(403, "origin_not_allowed", "Origin is not allowed")
@@ -184,6 +201,38 @@ class LaunchTokenMiddleware(BaseHTTPMiddleware):
         else:
             if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
                 return reject(403, "origin_not_allowed", "Origin is not allowed")
+
+        # 2b) CORS preflight for the allowlisted webview origins. A
+        # preflight OPTIONS never carries the launch token (browsers
+        # withhold credentials/headers on preflights by design), so it
+        # must be answered here, before the token check — otherwise
+        # WebView2 aborts every real request and the UI reports the
+        # backend as offline. Allow-Private-Network covers Chromium's
+        # loopback (Local Network Access) preflight from the secure
+        # tauri.localhost origin to 127.0.0.1.
+        if (
+            cors_origin is not None
+            and request.method == "OPTIONS"
+            and request.headers.get("access-control-request-method") is not None
+        ):
+            resp = Response(status_code=204)
+            resp.headers["Access-Control-Allow-Origin"] = cors_origin
+            resp.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            )
+            requested_headers = request.headers.get(
+                "access-control-request-headers"
+            )
+            resp.headers["Access-Control-Allow-Headers"] = (
+                requested_headers
+                if requested_headers
+                else "authorization, content-type, x-local-token"
+            )
+            resp.headers["Access-Control-Allow-Private-Network"] = "true"
+            resp.headers["Access-Control-Max-Age"] = "600"
+            resp.headers["Vary"] = "Origin, Access-Control-Request-Headers"
+            resp.headers["X-Request-Id"] = request_id
+            return resp
 
         # 3) Token check (all paths except the exact exempt set).
         #    Accepted presentations: ``X-Local-Token: <token>`` and
@@ -224,6 +273,9 @@ class LaunchTokenMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
         response.headers.setdefault("X-Request-Id", request_id)
+        if cors_origin is not None:
+            response.headers["Access-Control-Allow-Origin"] = cors_origin
+            response.headers.setdefault("Vary", "Origin")
         return response
 
     def _settings_override_token(self, request: Request) -> str:

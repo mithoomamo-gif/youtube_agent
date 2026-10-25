@@ -207,3 +207,69 @@ def test_api_path_requires_token(client):
     resp = client.get("/api/v1/system/info")
     assert resp.status_code == 401
     assert resp.json()["error"]["code"] == "missing_token"
+
+
+# -- CORS for the Tauri webview (patch v14) ------------------------------
+# Real-world failure (installer test, 2026-10-25): backend healthy and
+# READY on a real Windows install, yet the UI reported "Backend offline"
+# because WebView2 blocks cross-origin responses that carry no
+# Access-Control-Allow-Origin, and the preflight OPTIONS (which never
+# carries the launch token) was rejected 401 by the token check.
+
+TAURI_ORIGIN = "https://tauri.localhost"
+
+
+def test_preflight_from_tauri_origin_needs_no_token(client):
+    resp = client.options(
+        "/health/ready",
+        headers={
+            "Origin": TAURI_ORIGIN,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "x-local-token, authorization",
+        },
+    )
+    assert resp.status_code == 204
+    assert resp.headers["access-control-allow-origin"] == TAURI_ORIGIN
+    assert "GET" in resp.headers["access-control-allow-methods"]
+    assert resp.headers["access-control-allow-private-network"] == "true"
+    assert "x-local-token" in resp.headers["access-control-allow-headers"]
+
+
+def test_preflight_from_evil_origin_is_403_without_acao(client):
+    resp = client.options(
+        "/health/ready",
+        headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp.status_code == 403
+    assert "access-control-allow-origin" not in resp.headers
+
+
+def test_live_with_tauri_origin_carries_acao(client):
+    resp = client.get("/health/live", headers={"Origin": TAURI_ORIGIN})
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == TAURI_ORIGIN
+
+
+def test_ready_with_token_and_tauri_origin_carries_acao(client):
+    resp = client.get(
+        "/health/ready", headers={**AUTH, "Origin": TAURI_ORIGIN}
+    )
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == TAURI_ORIGIN
+
+
+def test_rejection_with_tauri_origin_still_carries_acao(client):
+    # No token -> 401, but the webview must be able to READ the error,
+    # otherwise it surfaces as an opaque network failure.
+    resp = client.get("/health/ready", headers={"Origin": TAURI_ORIGIN})
+    assert resp.status_code == 401
+    assert resp.headers["access-control-allow-origin"] == TAURI_ORIGIN
+
+
+def test_no_origin_means_no_acao(client):
+    resp = client.get("/health/live")
+    assert resp.status_code == 200
+    assert "access-control-allow-origin" not in resp.headers
