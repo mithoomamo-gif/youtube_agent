@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     YouTube Agent — Windows-native dev workflow (PowerShell mirror of the Makefile).
 
@@ -107,7 +107,9 @@ function Invoke-Setup {
             if ($LASTEXITCODE -ne 0) { Fail "pip install failed for $f — see output above." }
         }
     } elseif (Test-Path "backend\pyproject.toml") {
-        Warn "No requirements.txt found; backend/pyproject.toml exists but is not a requirements file. Skipping automatic pip install — once backend packaging is ready, install manually: $venvPip install -e backend/"
+        Info "Installing Python deps from backend/pyproject.toml (editable install) ..."
+        & $venvPip install -e backend/
+        if ($LASTEXITCODE -ne 0) { Fail "pip install failed for backend/pyproject.toml" }
     } else {
         Warn "No backend requirements found yet (looked for backend/requirements.txt, requirements.txt, backend/pyproject.toml). Skipping pip install — the backend has probably not landed yet."
     }

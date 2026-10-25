@@ -32,8 +32,8 @@ from app.routers import channels as channels_router
 
 CLIENT_ID = "entered-client-id.apps.googleusercontent.com"
 CLIENT_SECRET = "entered-client-secret-value"
-ACCESS_TOKEN = "ya29.entered-access-token"
-REFRESH_TOKEN = "1//entered-refresh-token"
+ACCESS_TOKEN = "fake-access-token-for-tests"
+REFRESH_TOKEN = "fake-refresh-token-for-tests"
 
 YT_ENTERED = "UCentered1234567"
 
