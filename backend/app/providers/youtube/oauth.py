@@ -81,6 +81,8 @@ _PAGE_CSS = """
            border-radius: 10px; padding: 10px 20px; font-size: 14px;
            font-weight: 600; cursor: pointer; }
   button:hover { background: #8d6dff; }
+  .hint { display: none; margin-top: 18px; font-size: 13px; color: #aab2c5;
+          line-height: 1.55; }
   .foot { margin-top: 20px; font-size: 12px; color: #5c6475; }
 """
 
@@ -108,6 +110,15 @@ def _callback_page(*, ok: bool, title: str, heading: str, message: str) -> bytes
     loopback listener on the user's own PC) and styled to match the
     app, because this page is part of the product's first impression.
     """
+    hint = (
+        "Your browser blocked this page from closing itself. Please "
+        "close the tab manually — the × on the tab, or Ctrl+W. "
+        + (
+            "Your channel stays connected."
+            if ok
+            else "Then try again from the app."
+        )
+    )
     html = (
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
@@ -116,10 +127,28 @@ def _callback_page(*, ok: bool, title: str, heading: str, message: str) -> bytes
         f"<div class=\"brand\">{_LOGO_SVG}<span>YouTube Agent</span></div>"
         f"{_OK_SVG if ok else _ERR_SVG}"
         f"<h1>{heading}</h1><p>{message}</p>"
-        "<button type=\"button\" onclick=\"window.close()\">Close this tab</button>"
+        "<button type=\"button\" id=\"closeBtn\" onclick=\"closeTab()\">"
+        "Close this tab</button>"
+        f"<div class=\"hint\" id=\"closeHint\">{hint}</div>"
         "<div class=\"foot\">This page is served locally by YouTube Agent "
         "on your PC.</div>"
-        "</main></body></html>"
+        "</main>"
+        "<script>"
+        # Browsers only allow a page to close a tab it opened itself;
+        # this tab came out of the Google sign-in redirect chain, so
+        # window.close() is usually ignored silently (user report,
+        # patch v23). Try the strongest permitted sequence, then —
+        # if the page is still here — swap the button for a plain
+        # manual-close instruction instead of looking broken.
+        "function closeTab(){"
+        "try{window.open('','_self');}catch(e){}"
+        "window.close();"
+        "setTimeout(function(){"
+        "document.getElementById('closeBtn').style.display='none';"
+        "document.getElementById('closeHint').style.display='block';"
+        "},350);}"
+        "</script>"
+        "</body></html>"
     )
     return html.encode("utf-8")
 
