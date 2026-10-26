@@ -14,6 +14,10 @@
  *   `{ reason_code?, note? }`. Reject REQUIRES a non-empty
  *   `reason_code` (else 422 `reason_code_required`). A second decision
  *   on the same id is 409 with error code `already_decided`.
+ * - The list is the FULL record — decided rows stay in it (with
+ *   `status: "decided"` and their `decision`). Anything presenting a
+ *   pending QUEUE must filter with {@link isPendingApproval}; the raw
+ *   list length is NOT a waiting count.
  * - There is no request-changes / edit endpoint; the screen keeps that
  *   affordance disabled rather than faking it.
  */
@@ -103,6 +107,8 @@ export interface ApprovalItemView {
   channelLabel?: string;
   nicheLabel?: string;
   status?: string;
+  /** The recorded decision (`approved` / `rejected`) once decided. */
+  decision?: string;
   createdAtMs?: number;
   /** "2h 14m" style age in queue, computed from createdAtMs. */
   waitingLabel?: string;
@@ -460,6 +466,7 @@ export function normalizeApprovalItem(raw: unknown): ApprovalItemView | null {
     channelLabel: str(pick(bag, ["channel", "channel_name", "channel_title", "channel_id", "channelId"])),
     nicheLabel: str(pick(bag, ["niche", "niche_name", "niche_profile_name"])),
     status: str(pick(bag, ["status", "state"])),
+    decision: str(pick(bag, ["decision"])),
     createdAtMs,
     waitingLabel: createdAtMs !== undefined ? waitingLabel(createdAtMs, Date.now()) : undefined,
     scriptLines,
@@ -480,6 +487,20 @@ export function normalizeApprovalItem(raw: unknown): ApprovalItemView | null {
     metadataVersion: versionFor(["metadata", "metadata_pack"], ["metadata_version", "metadata_v"]),
     costLabel,
   };
+}
+
+/**
+ * True while an item is still waiting for a human decision.
+ *
+ * The backend list keeps decided rows (see the header note), so queue
+ * views must apply this filter — an item leaves the pending queue for
+ * good once the backend records its decision, across remounts,
+ * refetches and other windows, not just in one session's local state.
+ */
+export function isPendingApproval(item: ApprovalItemView): boolean {
+  if ((item.status ?? "").trim().toLowerCase() === "decided") return false;
+  if ((item.decision ?? "").trim() !== "") return false;
+  return true;
 }
 
 // ── Error classification (branch on the stable code, never the message) ──

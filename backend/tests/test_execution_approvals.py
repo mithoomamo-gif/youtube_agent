@@ -563,3 +563,58 @@ def test_provider_last4_persisted_to_db(monkeypatch: pytest.MonkeyPatch) -> None
     openai = next(p for p in listing.json()["items"] if p["id"] == "openai")
     assert openai["configured"] is True
     assert openai["key_last4"] == "beef"
+
+
+# ---------------------------------------------------------------------------
+# (e) pipeline-created approval: the full queue contract end to end
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_created_approval_decide_flow() -> None:
+    """A Gate A item created by the pipeline's own ensure_approval path.
+
+    list shows it pending -> reject persists -> the list then reports
+    the row as status='decided' with its decision (the signal queue
+    views filter on, so the item leaves the pending queue durably)
+    -> a second decision is the ONLY already_decided 409.
+    """
+    _init_db()
+    project_id = _seed_project()
+
+    from app.db import get_connection
+    from app.execution import gates_bridge
+
+    approval_id = gates_bridge.ensure_approval(
+        get_connection, {"id": project_id}, "a", {}
+    )
+
+    client = _client()
+    listing = client.get("/api/v1/approvals")
+    assert listing.status_code == 200
+    mine = {i["id"]: i for i in listing.json()["items"]}[approval_id]
+    assert mine["status"] == "pending"
+    assert mine["decision"] is None
+    assert mine["project_id"] == project_id
+    assert mine["gate"] == "a"
+
+    decided = client.post(
+        f"/api/v1/approvals/{approval_id}/reject",
+        json={"reason_code": "wrong_facts"},
+        headers=_key(),
+    )
+    assert decided.status_code == 200
+    assert decided.json()["decision"] == "rejected"
+
+    listing = client.get("/api/v1/approvals")
+    mine = {i["id"]: i for i in listing.json()["items"]}[approval_id]
+    assert mine["status"] == "decided"
+    assert mine["decision"] == "rejected"
+    assert mine["reason_code"] == "wrong_facts"
+
+    second = client.post(
+        f"/api/v1/approvals/{approval_id}/approve",
+        json={},
+        headers=_key(),
+    )
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "already_decided"

@@ -25,6 +25,7 @@ import {
   isAlreadyDecidedError,
   isApprovalGoneError,
   isOfflineError,
+  isPendingApproval,
   useApprovals,
   useDecideApproval,
 } from "../api/queries/approvals";
@@ -217,9 +218,11 @@ export default function Review() {
   const decide = useDecideApproval();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Items decided in this session are removed from the queue view at
-  // once (the backend's skeleton decision log is in-memory and its list
-  // endpoint does not filter decided rows out yet).
+  // Items decided in this session are hidden from the queue at once,
+  // before the post-decision refetch lands. Durably, the queue shows
+  // only items the backend still reports as pending (the list keeps
+  // decided rows — see isPendingApproval), so a decided item stays
+  // gone across remounts and other windows too.
   const [decidedIds, setDecidedIds] = useState<ReadonlySet<string>>(new Set());
   const [rejectReason, setRejectReason] = useState<RejectReasonCode>(REJECT_REASONS[0].code);
   const [rejectNote, setRejectNote] = useState("");
@@ -229,7 +232,9 @@ export default function Review() {
   const noteRef = useRef<HTMLTextAreaElement | null>(null);
 
   const allItems = approvalsQuery.data ?? [];
-  const visibleItems = allItems.filter((item) => !decidedIds.has(item.id));
+  const visibleItems = allItems.filter(
+    (item) => isPendingApproval(item) && !decidedIds.has(item.id),
+  );
   // Effective selection: the chosen item, else the oldest waiting item.
   // If the chosen item disappears (decided / refreshed away) the detail
   // resets gracefully to the next queue item instead of crashing.

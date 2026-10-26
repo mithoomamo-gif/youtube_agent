@@ -12,6 +12,11 @@ import {
 } from "lucide-react";
 
 import { useChannels } from "../../api/queries/channels";
+import {
+  useEngineStatus,
+  useResumeEngine,
+  useStopAll,
+} from "../../api/queries/engine";
 import { useChannelSelectionStore } from "../../state/channelSelection";
 
 const HOLD_DURATION_MS = 600;
@@ -111,9 +116,17 @@ function ChannelSwitcher() {
 
 export function TitleBar() {
   const [holdProgress, setHoldProgress] = useState(0);
-  const [stopped, setStopped] = useState(false);
   const intervalRef = useRef<number | null>(null);
   const startedAtRef = useRef<number>(0);
+
+  // STOP ALL is real since patch v22: the stopped state comes from
+  // the backend's persisted execution flags (GET /engine/status), not
+  // from local UI state, so every screen agrees and a reload cannot
+  // "un-stop" the engine.
+  const engineStatus = useEngineStatus();
+  const stopAll = useStopAll();
+  const resumeEngine = useResumeEngine();
+  const stopped = engineStatus.data?.stopAll === true;
 
   const clearHoldTimer = () => {
     if (intervalRef.current !== null) {
@@ -141,10 +154,10 @@ export function TitleBar() {
       if (elapsed >= HOLD_DURATION_MS) {
         clearHoldTimer();
         setHoldProgress(100);
-        // Visual confirm state only for now.
-        // TODO: call the sidecar kill switch via the API (POST /engine/stop-all)
-        // so every running agent/job is halted, not just this UI state.
-        setStopped(true);
+        // Hold complete — fire the real kill switch: the backend
+        // sets the persisted stop_all flag (the runner cancels
+        // in-flight work and exits) and cancels waiting jobs.
+        stopAll.mutate();
       }
     }, HOLD_TICK_MS);
   };
@@ -181,34 +194,48 @@ export function TitleBar() {
 
       <div className="flex-1" data-tauri-drag-region />
 
-      {/* STOP ALL — press-and-hold kill switch */}
-      <button
-        type="button"
-        aria-pressed={stopped}
-        title={stopped ? "All agents stopped" : "Press and hold to stop all agents"}
-        onPointerDown={startHold}
-        onPointerUp={cancelHold}
-        onPointerLeave={cancelHold}
-        onContextMenu={(event) => event.preventDefault()}
-        className={`relative flex select-none items-center gap-2 overflow-hidden rounded-lg px-4 py-1.5 font-bold text-white transition ${
-          stopped ? "bg-danger" : "bg-stop hover:brightness-110"
-        }`}
-      >
-        {!stopped && holdProgress > 0 ? (
-          <span
-            className="absolute inset-y-0 left-0 bg-white/30"
-            style={{ width: `${holdProgress}%` }}
-          />
-        ) : null}
-        <span className="relative flex items-center gap-2">
-          {stopped ? (
-            <Check className="h-4 w-4" />
-          ) : (
+      {/* STOP ALL — press-and-hold kill switch (real since v22:
+          fires POST /engine/stop-all; while the backend reports
+          stop_all, the button becomes RESUME instead). */}
+      {stopped ? (
+        <button
+          type="button"
+          title="The engine is stopped. Click to clear the stop flag and restart the engine."
+          disabled={resumeEngine.isPending}
+          onClick={() => {
+            setHoldProgress(0);
+            resumeEngine.mutate();
+          }}
+          className="relative flex select-none items-center gap-2 overflow-hidden rounded-lg bg-danger px-4 py-1.5 font-bold text-white transition hover:brightness-110 disabled:opacity-60"
+        >
+          <span className="relative flex items-center gap-2">
+            <Play className="h-4 w-4" />
+            {resumeEngine.isPending ? "RESUMING…" : "RESUME"}
+          </span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          aria-pressed={false}
+          title="Press and hold to stop all agents"
+          onPointerDown={startHold}
+          onPointerUp={cancelHold}
+          onPointerLeave={cancelHold}
+          onContextMenu={(event) => event.preventDefault()}
+          className="relative flex select-none items-center gap-2 overflow-hidden rounded-lg bg-stop px-4 py-1.5 font-bold text-white transition hover:brightness-110"
+        >
+          {holdProgress > 0 ? (
+            <span
+              className="absolute inset-y-0 left-0 bg-white/30"
+              style={{ width: `${holdProgress}%` }}
+            />
+          ) : null}
+          <span className="relative flex items-center gap-2">
             <OctagonX className="h-4 w-4" />
-          )}
-          {stopped ? "ALL STOPPED" : "STOP ALL"}
-        </span>
-      </button>
+            {stopAll.isPending ? "STOPPING…" : "STOP ALL"}
+          </span>
+        </button>
+      )}
 
       {/* Window controls */}
       <div className="flex items-center gap-1">

@@ -13,7 +13,7 @@ import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Badge } from "../components/ui/Badge";
 import { ApiError } from "../api/types";
-import { useApprovals } from "../api/queries/approvals";
+import { isPendingApproval, useApprovals } from "../api/queries/approvals";
 import {
   useCreateSchedule,
   useDeleteSchedule,
@@ -202,9 +202,7 @@ export default function Schedules() {
   const schedules = schedulesQuery.data ?? [];
   const channels = channelsQuery.data ?? [];
   const niches = nichesQuery.data ?? [];
-  const pendingApprovals = (approvalsQuery.data ?? []).filter(
-    (item) => !item.status || item.status.toLowerCase() === "pending",
-  ).length;
+  const pendingApprovals = (approvalsQuery.data ?? []).filter(isPendingApproval).length;
 
   // Preselect the first real channel/niche in a fresh create form.
   useEffect(() => {

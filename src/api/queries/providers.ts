@@ -205,6 +205,12 @@ export function useSaveProviderKey() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["providers"] });
+      // The First-Run wizard's key cards read their state from the
+      // onboarding status (["onboarding", "status"]), NOT from
+      // ["providers"] — without this invalidation a saved key leaves
+      // that card stuck on "Not saved" with its Test button disabled
+      // until a full reload.
+      void queryClient.invalidateQueries({ queryKey: ["onboarding"] });
     },
   });
 }
@@ -219,11 +225,13 @@ export function useRemoveProviderKey() {
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["providers"] });
+      void queryClient.invalidateQueries({ queryKey: ["onboarding"] });
     },
   });
 }
 
 export function useTestProvider() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (providerId: string): Promise<ProviderTestWire> => {
       const raw = await request<unknown>(
@@ -243,6 +251,13 @@ export function useTestProvider() {
         detail: typeof r.detail === "string" ? r.detail : undefined,
         message: typeof r.message === "string" ? r.message : undefined,
       };
+    },
+    onSuccess: () => {
+      // A completed test changes the read models on both surfaces:
+      // GET /providers gains status/connected/last_test, and the
+      // onboarding status flips the key to verified (or test-failed).
+      void queryClient.invalidateQueries({ queryKey: ["providers"] });
+      void queryClient.invalidateQueries({ queryKey: ["onboarding"] });
     },
   });
 }

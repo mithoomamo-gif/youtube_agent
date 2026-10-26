@@ -42,6 +42,12 @@ import type {
   NameContext,
   ProjectSummary,
 } from "../api/queries/agents";
+import {
+  useEngineStatus,
+  usePauseAll,
+  useResumeEngine,
+  useStopAll,
+} from "../api/queries/engine";
 
 // ── Pipeline phases (backend ids, MASTER_ROADMAP §5.2 order) ───────────
 
@@ -218,6 +224,13 @@ function AgentCard({
 export default function AgentsLive() {
   const navigate = useNavigate();
   const agentsQuery = useAgentsCatalogue();
+  // Engine controls (real since v22 — POST /engine/*).
+  const engineStatus = useEngineStatus();
+  const pauseAll = usePauseAll();
+  const stopAll = useStopAll();
+  const resumeEngine = useResumeEngine();
+  const engineStopped = engineStatus.data?.stopAll === true;
+  const enginePaused = !engineStopped && engineStatus.data?.pauseAll === true;
   const projectsQuery = useAgentProjects();
   const historyQuery = useActivityHistory();
 
@@ -460,18 +473,28 @@ export default function AgentsLive() {
         </div>
         <Button
           variant="outline"
-          disabled
-          title="Not available yet — the backend has no pause-all endpoint, and WebSocket commands are not wired yet."
+          disabled={engineStopped || pauseAll.isPending || resumeEngine.isPending}
+          title={
+            enginePaused
+              ? "Resume the engine — new jobs will be claimed again."
+              : "Pause the engine — running jobs finish, no new jobs start."
+          }
+          onClick={() => (enginePaused ? resumeEngine.mutate() : pauseAll.mutate())}
         >
           <Pause className="mr-1.5 h-4 w-4" />
-          Pause All
+          {enginePaused ? "Resume" : "Pause All"}
         </Button>
         <Button
           variant="danger"
-          disabled
-          title="Not available yet — the backend has no stop-all endpoint, and WebSocket commands are not wired yet."
+          disabled={stopAll.isPending || resumeEngine.isPending}
+          title={
+            engineStopped
+              ? "Resume the engine — clears the stop flag and restarts it."
+              : "Stop the whole engine now — running jobs are cancelled and waiting jobs are dropped."
+          }
+          onClick={() => (engineStopped ? resumeEngine.mutate() : stopAll.mutate())}
         >
-          STOP ALL
+          {engineStopped ? "RESUME" : "STOP ALL"}
         </Button>
       </header>
 

@@ -21,6 +21,7 @@ from app.routers import (
     comments,
     compliance,
     diagnostics,
+    engine,
     jobs,
     learning,
     logs,
@@ -53,6 +54,7 @@ router.include_router(learning.router)
 router.include_router(jobs.router)
 router.include_router(agents.router)
 router.include_router(schedules.router)
+router.include_router(engine.router)
 router.include_router(providers.router)
 router.include_router(settings.router)
 router.include_router(compliance.router)
